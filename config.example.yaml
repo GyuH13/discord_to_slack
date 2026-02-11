@@ -1,0 +1,9 @@
+# Discord 봇 토큰 (Developer Portal → Bot → Reset Token)
+discord_token: ""
+
+# Slack Incoming Webhook URL
+slack_webhook_url: ""
+
+# 전송할 포럼 채널 ID 목록. 비우면 모든 포럼이 대상
+# Discord 개발자 모드 켜고 포럼 채널 우클릭 → 채널 ID 복사
+forum_channel_ids: []
