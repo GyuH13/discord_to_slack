@@ -1,10 +1,10 @@
-"""Discord 봇 클라이언트."""
+"""Discord Bot Client."""
 
 import discord
 from discord import Thread
 
 from .config import Config, load_config
-from .slack import send_to_slack
+from .slack import send_to_slack_message, send_to_trigger_webhook
 
 
 def _create_client() -> discord.Client:
@@ -22,6 +22,13 @@ def _tags_from_thread(t: discord.Thread) -> list[str]:
             out.append(name)
     return out
 
+def _check_thread_valid(parent: discord.ForumChannel) -> bool:
+    """check if thread is valid."""
+    return parent is not None and isinstance(parent, discord.ForumChannel)
+
+def _check_target_channel(parent: discord.ForumChannel, config: Config) -> bool:
+    """check if parent is in the list of forum channel ids."""
+    return config.forum_channel_ids and str(parent.id) in config.forum_channel_ids
 
 async def _handle_thread_create(
     thread: Thread,
@@ -29,16 +36,9 @@ async def _handle_thread_create(
 ) -> None:
     """send forum post to slack."""
     parent = thread.parent
-    # sometimes thread is not created in a forum channel
-    if parent is None:
+    if not _check_thread_valid(parent):
         return
-
-    # check if parent is a forum channel
-    if not isinstance(parent, discord.ForumChannel):
-        return
-    
-    # check if parent is in the list of forum channel ids
-    if config.forum_channel_ids and str(parent.id) not in config.forum_channel_ids:
+    if not _check_target_channel(parent, config):
         return
 
     content = ""
@@ -50,9 +50,9 @@ async def _handle_thread_create(
             break
         if forum_post:
             content = (forum_post.content or "").strip()
-            u = forum_post.author
-            display = getattr(u, "display_name", None)
-            author = f"{display} ({u})"
+            user_id = forum_post.author
+            user_nickname = getattr(user_id, "display_name", None)
+            author = f"{user_nickname} ({user_id})"
     except discord.DiscordException:
         if thread.owner_id:
             author = f"알 수 없음 ({thread.owner_id})"
@@ -62,7 +62,7 @@ async def _handle_thread_create(
     tag_names: list[str] = []
     tag_names = _tags_from_thread(thread)
 
-    send_to_slack(
+    send_to_slack_message(
         webhook_url=config.slack_webhook_url,
         title=thread.name,
         content=content,
@@ -71,7 +71,14 @@ async def _handle_thread_create(
         forum_name=parent.name,
         tags=tag_names,
     )
-    print(f"completed sending to slack: {thread.name} ({thread.id})")
+    send_to_trigger_webhook(
+        webhook_url=config.trigger_webhook_url,
+        title=thread.name,
+        url=url,
+        tags=tag_names,
+        created_at=thread.created_at,
+    )
+
 
 
 def run_bot(config: Config | None = None) -> None:

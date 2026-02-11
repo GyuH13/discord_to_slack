@@ -1,5 +1,7 @@
 """Send message to slack."""
 
+from datetime import datetime
+
 import requests
 
 
@@ -8,7 +10,7 @@ def _slack_escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def send_to_slack(
+def send_to_slack_message(
     *,
     webhook_url: str,
     title: str,
@@ -54,6 +56,31 @@ def send_to_slack(
                 "text": {"type": "mrkdwn", "text": f"*💬본문*\n{content_escaped}"},
             },
         ],
+    }
+
+    resp = requests.post(
+        webhook_url,
+        json=payload,
+        headers={"Content-Type": "application/json"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+
+
+def send_to_trigger_webhook(
+    *,
+    webhook_url: str,
+    title: str,
+    url: str,
+    tags: list[str] | None = None,
+    created_at: datetime,
+) -> None:
+    """send to trigger webhook."""
+    payload = {
+        "title": title,
+        "url": url,
+        "tags": tags or [],
+        "created_at": created_at.isoformat(),
     }
 
     resp = requests.post(

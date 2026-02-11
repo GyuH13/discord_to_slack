@@ -17,6 +17,7 @@ class Config:
     discord_token: str
     slack_webhook_url: str
     forum_channel_ids: list[str]
+    trigger_webhook_url: str = ""
 
     def validate(self) -> None:
         """validate required settings."""
@@ -51,11 +52,13 @@ def load_config(path: str | Path | None = None) -> Config:
         for s in (data.get("forum_channel_ids") or [])
         if s
     ]
+    trigger_webhook_url = (data.get("trigger_webhook_url") or "").strip()
 
     config = Config(
         discord_token=discord_token,
         slack_webhook_url=slack_webhook_url,
         forum_channel_ids=forum_channel_ids,
+        trigger_webhook_url=trigger_webhook_url,
     )
     config.validate()
     return config
