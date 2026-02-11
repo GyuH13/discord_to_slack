@@ -1,7 +1,7 @@
 services:
-  discord-forum-slack:
+  discord-to-slack-bot:
     build: .
-    container_name: discord-forum-slack
+    container_name: discord-to-slack-bot
     restart: unless-stopped
     volumes:
       - ./config.yaml:/app/config.yaml:ro
