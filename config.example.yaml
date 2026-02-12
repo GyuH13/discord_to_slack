@@ -10,3 +10,7 @@ forum_channel_ids: []
 
 # 트리거 웹후크 URL (장표 작성용). 비우면 트리거 전송 안 함
 trigger_webhook_url: ""
+
+# /sync-forum 명령 허용 Discord 유저 ID 목록. 비우면 서버 내 누구나 실행 가능
+# 본인만 허용하려면: [ "내디스코드유저ID" ]
+# sync_command_user_ids: []

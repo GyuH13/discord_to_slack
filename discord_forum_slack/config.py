@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -18,6 +18,8 @@ class Config:
     slack_webhook_url: str
     forum_channel_ids: list[str]
     trigger_webhook_url: str = ""
+    # 동기화 슬래시 명령 허용 Discord 유저 ID 목록. 비우면 서버 내 누구나 실행 가능
+    sync_command_user_ids: list[str] = field(default_factory=list)
 
     def validate(self) -> None:
         """validate required settings."""
@@ -53,12 +55,18 @@ def load_config(path: str | Path | None = None) -> Config:
         if s
     ]
     trigger_webhook_url = (data.get("trigger_webhook_url") or "").strip()
+    sync_command_user_ids = [
+        str(s).strip()
+        for s in (data.get("sync_command_user_ids") or [])
+        if s
+    ]
 
     config = Config(
         discord_token=discord_token,
         slack_webhook_url=slack_webhook_url,
         forum_channel_ids=forum_channel_ids,
         trigger_webhook_url=trigger_webhook_url,
+        sync_command_user_ids=sync_command_user_ids,
     )
     config.validate()
     return config
