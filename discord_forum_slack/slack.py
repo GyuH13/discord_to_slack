@@ -77,14 +77,15 @@ def send_to_trigger_webhook(
     status_tag: list[str] | None = None,
     created_at: datetime,
 ) -> None:
-    """send to trigger webhook. created_at은 텍스트 컬럼용 보기 편한 형식, created_at_unix는 날짜 필드용."""
+    """send to trigger webhook."""
     created_readable = created_at.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M (KST)")
+    tags = field_tag or []
     payload = {
         "title": title,
         "url": url,
-        "field_tag": field_tag or [],
-        "status_tag": status_tag or [],
-        "created_at": created_readable
+        "field_tag": ", ".join(tags),
+        "status_tag": status_tag,
+        "created_at": created_readable,
     }
 
     resp = requests.post(
