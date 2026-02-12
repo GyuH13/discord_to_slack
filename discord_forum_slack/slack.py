@@ -82,7 +82,7 @@ def send_to_trigger_webhook(
         "url": url,
         "field_tag": field_tag or [],
         "status_tag": status_tag or [],
-        "created_at": created_at.isoformat(),
+        "created_at": int(created_at.timestamp())
     }
 
     resp = requests.post(
