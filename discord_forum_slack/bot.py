@@ -50,7 +50,7 @@ async def _collect_all_forum_threads(client: discord.Client, config: Config) -> 
     return threads
 
 
-async def _sync_forum_to_trigger(client: discord.Client, config: Config) -> int:
+async def _sync_issue_table(client: discord.Client, config: Config) -> int:
     """포럼 채널 전체 글을 트리거 웹후크로 전송하고 전송한 스레드 개수를 반환한다."""
     if not config.trigger_webhook_url:
         return 0
@@ -61,7 +61,7 @@ async def _sync_forum_to_trigger(client: discord.Client, config: Config) -> int:
             parent = thread.parent
             if parent is None:
                 continue
-            url = f"https://discord.com/channels/{thread.guild.id}/{thread.parent_id}/{thread.id}"
+            url = f"https://discord.com/channels/{thread.guild.id}/{thread.id}"
             tag_names = _tags_from_thread(thread)
             send_to_trigger_webhook(
                 webhook_url=config.trigger_webhook_url,
@@ -76,7 +76,7 @@ async def _sync_forum_to_trigger(client: discord.Client, config: Config) -> int:
     return sent
 
 
-async def _handle_thread_create(
+async def _transfer_issue_to_slack(
     thread: Thread,
     config: Config,
 ) -> None:
@@ -103,7 +103,7 @@ async def _handle_thread_create(
         if thread.owner_id:
             author = f"알 수 없음 ({thread.owner_id})"
 
-    url = f"https://discord.com/channels/{thread.guild.id}/{thread.parent_id}/{thread.id}"
+    url = f"https://discord.com/channels/{thread.guild.id}/{thread.id}"
 
     tag_names: list[str] = []
     tag_names = _tags_from_thread(thread)
@@ -134,7 +134,7 @@ def run_bot(config: Config | None = None) -> None:
     client = _create_client()
     tree = app_commands.CommandTree(client)
 
-    @tree.command(name="sync-issue-table", description="포럼 채널 전체 글을 장표(트리거 웹후크)에 동기화합니다")
+    @tree.command(name="sync-issue-table", description="포럼 채널 전체 글을 슬랙의 장표에 동기화합니다")
     async def sync_issue_table(interaction: discord.Interaction) -> None:
         if cfg.sync_command_user_ids and str(interaction.user.id) not in cfg.sync_command_user_ids:
             await interaction.response.send_message(
@@ -144,13 +144,13 @@ def run_bot(config: Config | None = None) -> None:
             return
         if not cfg.trigger_webhook_url:
             await interaction.response.send_message(
-                "트리거 웹후크 URL이 설정되지 않았습니다. config.yaml의 trigger_webhook_url을 설정하세요.",
+                "트리거 웹후크 URL이 설정되지 않았습니다. 관리자에게 문의하세요.",
                 ephemeral=True,
             )
             return
         await interaction.response.defer(ephemeral=True)
         try:
-            count = await _sync_forum_to_trigger(interaction.client, cfg)
+            count = await _sync_issue_table(interaction.client, cfg)
             await interaction.followup.send(
                 f"동기화 완료: {count}개 스레드를 장표로 전송했습니다.",
                 ephemeral=True,
@@ -169,7 +169,7 @@ def run_bot(config: Config | None = None) -> None:
     @client.event
     async def on_thread_create(thread: Thread):
         try:
-            await _handle_thread_create(thread, cfg)
+            await _transfer_issue_to_slack(thread, cfg)
         except Exception as e:
             print(f"Error sending forum to Slack: {e}")
 
