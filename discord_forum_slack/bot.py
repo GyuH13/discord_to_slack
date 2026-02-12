@@ -1,12 +1,15 @@
 """Discord Bot Client."""
 
 import asyncio
+import logging
 
 import discord
 from discord import app_commands, Thread
 
 from .config import Config, load_config
 from .slack import send_to_slack_message, send_to_trigger_webhook
+
+logger = logging.getLogger(__name__)
 
 FIELD_TAG = ["dynamixel", "ai-worker", "omy", "omx", "hand","turtlebot","others"]
 STATUS_TAG_LABEL: dict[str, str] = {
@@ -67,11 +70,16 @@ async def _sync_issue_table(client: discord.Client, config: Config) -> int:
     if not config.trigger_webhook_url:
         return 0
     threads = await _get_all_threads(client, config)
+    print(f"Found {len(threads)} threads to sync.")
     sent = 0
     for thread in threads:
         try:
             parent = thread.parent
-            if not _check_thread_valid(parent) or not _check_target_channel(parent, config):
+            if not _check_thread_valid(parent):
+                logger.debug("skip thread %s: parent invalid or not forum channel", thread.id)
+                continue
+            if not _check_target_channel(parent, config):
+                logger.debug("skip thread %s: parent channel %s not in config", thread.id, parent.id if parent else None)
                 continue
             url = f"https://discord.com/channels/{thread.guild.id}/{thread.id}"
             tag_names = _tags_from_thread(thread)
