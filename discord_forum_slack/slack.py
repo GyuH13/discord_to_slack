@@ -72,14 +72,16 @@ def send_to_trigger_webhook(
     webhook_url: str,
     title: str,
     url: str,
-    tags: list[str] | None = None,
+    field_tag: list[str] | None = None,
+    status_tag: list[str] | None = None,
     created_at: datetime,
 ) -> None:
     """send to trigger webhook."""
     payload = {
         "title": title,
         "url": url,
-        "tags": tags or [],
+        "field_tag": field_tag or [],
+        "status_tag": status_tag or [],
         "created_at": created_at.isoformat(),
     }
 

@@ -6,6 +6,9 @@ from discord import app_commands, Thread
 from .config import Config, load_config
 from .slack import send_to_slack_message, send_to_trigger_webhook
 
+FIELD_TAG = ["dynamixel", "ai-worker", "omy", "omx", "hand","turtlebot","others"]
+STATUS_TAG = ["🟢New", "🟡Handling", "✅Solved"]
+
 
 def _create_client() -> discord.Client:
     """create discord client with configured intents."""
@@ -31,8 +34,8 @@ def _check_target_channel(parent: discord.ForumChannel, config: Config) -> bool:
     return config.forum_channel_ids and str(parent.id) in config.forum_channel_ids
 
 
-async def _collect_all_forum_threads(client: discord.Client, config: Config) -> list[Thread]:
-    """config에 기술된 forum_channel_ids 4개 채널에서만 활성+아카이브 스레드를 수집한다."""
+async def _get_all_threads(client: discord.Client, config: Config) -> list[Thread]:
+    """Return all threads in the forum channels specified in the config."""
     threads: list[Thread] = []
     for cid in config.forum_channel_ids:
         try:
@@ -51,23 +54,26 @@ async def _collect_all_forum_threads(client: discord.Client, config: Config) -> 
 
 
 async def _sync_issue_table(client: discord.Client, config: Config) -> int:
-    """포럼 채널 전체 글을 트리거 웹후크로 전송하고 전송한 스레드 개수를 반환한다."""
+    """synchronize issue table in slack."""
     if not config.trigger_webhook_url:
         return 0
-    threads = await _collect_all_forum_threads(client, config)
+    threads = await _get_all_threads(client, config)
     sent = 0
     for thread in threads:
         try:
             parent = thread.parent
-            if parent is None:
-                continue
+            if not _check_thread_valid(parent) or not _check_target_channel(parent, config):
+                return
             url = f"https://discord.com/channels/{thread.guild.id}/{thread.id}"
             tag_names = _tags_from_thread(thread)
+            field_tag = [tag for tag in tag_names if tag in FIELD_TAG]
+            status_tag = [tag for tag in tag_names if tag in STATUS_TAG]
             send_to_trigger_webhook(
                 webhook_url=config.trigger_webhook_url,
                 title=thread.name,
                 url=url,
-                tags=tag_names,
+                field_tag=field_tag,
+                status_tag=status_tag,
                 created_at=thread.created_at,
             )
             sent += 1
@@ -80,11 +86,9 @@ async def _transfer_issue_to_slack(
     thread: Thread,
     config: Config,
 ) -> None:
-    """config에 기술된 4개 포럼 채널에서만 새 글을 Slack/트리거 웹후크로 전송한다."""
+    """transfer issue to slack."""
     parent = thread.parent
-    if not _check_thread_valid(parent):
-        return
-    if not _check_target_channel(parent, config):
+    if not _check_thread_valid(parent) or not _check_target_channel(parent, config):
         return
 
     content = ""
@@ -121,7 +125,8 @@ async def _transfer_issue_to_slack(
         webhook_url=config.trigger_webhook_url,
         title=thread.name,
         url=url,
-        tags=tag_names,
+        field_tag=field_tag,
+        status_tag=status_tag,
         created_at=thread.created_at,
     )
 
