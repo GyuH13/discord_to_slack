@@ -70,7 +70,7 @@ async def _sync_issue_table(client: discord.Client, config: Config) -> int:
     if not config.trigger_webhook_url:
         return 0
     threads = await _get_all_threads(client, config)
-    print(f"Found {len(threads)} threads to sync.")
+    logger.info("sync-issue-table: found %s threads", len(threads))
     sent = 0
     for thread in threads:
         try:
@@ -85,18 +85,37 @@ async def _sync_issue_table(client: discord.Client, config: Config) -> int:
             tag_names = _tags_from_thread(thread)
             field_tag = [tag for tag in tag_names if tag in FIELD_TAG]
             status_tag = [STATUS_TAG_LABEL[tag] for tag in tag_names if tag in STATUS_TAG_LABEL]
-            await asyncio.to_thread(
-                send_to_trigger_webhook,
-                webhook_url=config.trigger_webhook_url,
-                title=thread.name,
-                url=url,
-                field_tag=field_tag,
-                status_tag=status_tag,
-                created_at=thread.created_at,
-            )
-            sent += 1
-        except Exception:
-            continue
+            last_error: Exception | None = None
+            for attempt in range(3):
+                try:
+                    await asyncio.to_thread(
+                        send_to_trigger_webhook,
+                        webhook_url=config.trigger_webhook_url,
+                        title=thread.name,
+                        url=url,
+                        field_tag=field_tag,
+                        status_tag=status_tag,
+                        created_at=thread.created_at,
+                    )
+                    sent += 1
+                    if attempt > 0:
+                        logger.info("thread %s succeeded on retry %s", thread.id, attempt + 1)
+                    break
+                except Exception as e:
+                    last_error = e
+                    logger.warning("sync attempt %s/3 failed for thread %s (%s): %s", attempt + 1, thread.id, thread.name, e)
+                    if attempt < 2:
+                        delay = 5.0 if "429" in str(e) else 2.0
+                        await asyncio.sleep(delay)
+            else:
+                logger.warning("sync gave up for thread %s (%s): %s", thread.id, thread.name, last_error)
+            await asyncio.sleep(1.5)
+        except Exception as e:
+            logger.warning("sync failed for thread %s (%s): %s", thread.id, thread.name, e)
+            if "429" in str(e):
+                await asyncio.sleep(2.0)
+            await asyncio.sleep(1.5)
+    logger.info("sync-issue-table done: sent=%s total_threads=%s", sent, len(threads))
     return sent
 
 
