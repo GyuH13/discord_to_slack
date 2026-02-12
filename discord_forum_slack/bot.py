@@ -8,6 +8,12 @@ from .slack import send_to_slack_message, send_to_trigger_webhook
 
 FIELD_TAG = ["dynamixel", "ai-worker", "omy", "omx", "hand","turtlebot","others"]
 STATUS_TAG = ["🟢New", "🟡Handling", "✅Solved"]
+# Discord 태그(아이콘 포함) → 장표용 라벨 (아이콘 제거, Solved→Complete, New→New Issue)
+STATUS_TAG_LABEL: dict[str, str] = {
+    "🟢New": "New Issue",
+    "🟡Handling": "Handling",
+    "✅Solved": "Complete",
+}
 
 
 def _create_client() -> discord.Client:
@@ -67,7 +73,7 @@ async def _sync_issue_table(client: discord.Client, config: Config) -> int:
             url = f"https://discord.com/channels/{thread.guild.id}/{thread.id}"
             tag_names = _tags_from_thread(thread)
             field_tag = [tag for tag in tag_names if tag in FIELD_TAG]
-            status_tag = [tag for tag in tag_names if tag in STATUS_TAG]
+            status_tag = [STATUS_TAG_LABEL[tag] for tag in tag_names if tag in STATUS_TAG]
             send_to_trigger_webhook(
                 webhook_url=config.trigger_webhook_url,
                 title=thread.name,
@@ -109,8 +115,9 @@ async def _transfer_issue_to_slack(
 
     url = f"https://discord.com/channels/{thread.guild.id}/{thread.id}"
 
-    tag_names: list[str] = []
     tag_names = _tags_from_thread(thread)
+    field_tag = [tag for tag in tag_names if tag in FIELD_TAG]
+    status_tag = [STATUS_TAG_LABEL[tag] for tag in tag_names if tag in STATUS_TAG]
 
     send_to_slack_message(
         webhook_url=config.slack_webhook_url,
