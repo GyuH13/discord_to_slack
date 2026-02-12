@@ -1,6 +1,7 @@
 """Send message to slack."""
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -76,13 +77,14 @@ def send_to_trigger_webhook(
     status_tag: list[str] | None = None,
     created_at: datetime,
 ) -> None:
-    """send to trigger webhook."""
+    """send to trigger webhook. created_at은 텍스트 컬럼용 보기 편한 형식, created_at_unix는 날짜 필드용."""
+    created_readable = created_at.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M (KST)")
     payload = {
         "title": title,
         "url": url,
         "field_tag": field_tag or [],
         "status_tag": status_tag or [],
-        "created_at": int(created_at.timestamp())
+        "created_at": created_readable
     }
 
     resp = requests.post(
