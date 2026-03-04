@@ -140,10 +140,6 @@ async def _transfer_issue_to_slack(
             content = (forum_post.content or "").strip()
             attachments = getattr(forum_post, "attachments", None) or []
             attachment_urls = [a.url for a in attachments if getattr(a, "url", None)]
-            if not content and attachment_urls:
-                content = "Attachments:\n" + "\n".join(attachment_urls)
-            elif content and attachment_urls:
-                content = content + "\n\nAttachments:\n" + "\n".join(attachment_urls)
             user_id = forum_post.author
             user_nickname = getattr(user_id, "display_name", None)
             author = f"{user_nickname} ({user_id})"
