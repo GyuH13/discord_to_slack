@@ -130,6 +130,7 @@ async def _transfer_issue_to_slack(
 
     content = ""
     author = "unknown"
+    attachment_urls: list[str] = []
     try:
         forum_post = None
         async for msg in thread.history(limit=1, oldest_first=True):
@@ -137,6 +138,12 @@ async def _transfer_issue_to_slack(
             break
         if forum_post:
             content = (forum_post.content or "").strip()
+            attachments = getattr(forum_post, "attachments", None) or []
+            attachment_urls = [a.url for a in attachments if getattr(a, "url", None)]
+            if not content and attachment_urls:
+                content = "Attachments:\n" + "\n".join(attachment_urls)
+            elif content and attachment_urls:
+                content = content + "\n\nAttachments:\n" + "\n".join(attachment_urls)
             user_id = forum_post.author
             user_nickname = getattr(user_id, "display_name", None)
             author = f"{user_nickname} ({user_id})"
@@ -159,6 +166,7 @@ async def _transfer_issue_to_slack(
         url=url,
         forum_name=parent.name,
         tags=tag_names,
+        attachment_urls=attachment_urls,
     )
     await asyncio.to_thread(
         send_to_trigger_webhook,
