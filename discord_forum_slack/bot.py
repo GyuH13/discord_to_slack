@@ -290,7 +290,12 @@ def run_bot(config: Config | None = None) -> None:
     async def on_thread_create(thread: Thread):
         try:
             await _transfer_issue_to_slack(thread, cfg)
-        except Exception as e:
-            print(f"Error sending forum to Slack: {e}")
+            logger.info("전송 완료: 스레드 %s, 제목: %s → Slack", thread.id, thread.name)
+        except Exception:
+            logger.exception(
+                "전송 실패: 스레드 %s, 제목: %s → Slack",
+                thread.id,
+                thread.name,
+            )
 
     client.run(cfg.discord_token)
