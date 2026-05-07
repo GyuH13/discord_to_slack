@@ -58,20 +58,12 @@ async def _send_thread_to_slack_message_only(thread: Thread, config: Config) -> 
     parent = thread.parent
     if not _check_thread_valid(parent):
         raise ValueError("이 채널은 포럼 스레드가 아닙니다.")
-    content = ""
     author = "unknown"
-    attachment_urls: list[str] = []
     try:
-        forum_post = None
         async for msg in thread.history(limit=1, oldest_first=True):
-            forum_post = msg
-            break
-        if forum_post:
-            content = (forum_post.content or "").strip()
-            attachments = getattr(forum_post, "attachments", None) or []
-            attachment_urls = [a.url for a in attachments if getattr(a, "url", None)]
-            u = forum_post.author
+            u = msg.author
             author = f"{getattr(u, 'display_name', None)} ({u})"
+            break
     except discord.DiscordException:
         if thread.owner_id:
             author = f"알 수 없음 ({thread.owner_id})"
@@ -81,12 +73,10 @@ async def _send_thread_to_slack_message_only(thread: Thread, config: Config) -> 
         send_to_slack_message,
         webhook_url=config.slack_webhook_url,
         title=thread.name,
-        content=content,
         author=author,
         url=url,
         forum_name=parent.name,
         tags=tag_names,
-        attachment_urls=attachment_urls,
     )
 
 
@@ -168,31 +158,25 @@ async def _transfer_issue_to_slack(
     config: Config,
 ) -> None:
     """transfer issue to slack."""
+
+    # Check Validity
     parent = thread.parent
     if not _check_thread_valid(parent) or not _check_target_channel(parent, config):
         return
 
-    content = ""
+    # Get Author Name and ID
     author = "unknown"
-    attachment_urls: list[str] = []
     try:
-        forum_post = None
         async for msg in thread.history(limit=1, oldest_first=True):
-            forum_post = msg
+            u = msg.author
+            author = f"{getattr(u, 'display_name', None)} ({u})"
             break
-        if forum_post:
-            content = (forum_post.content or "").strip()
-            attachments = getattr(forum_post, "attachments", None) or []
-            attachment_urls = [a.url for a in attachments if getattr(a, "url", None)]
-            user_id = forum_post.author
-            user_nickname = getattr(user_id, "display_name", None)
-            author = f"{user_nickname} ({user_id})"
     except discord.DiscordException:
         if thread.owner_id:
-            author = f"알 수 없음 ({thread.owner_id})"
+            author = f"Unknown ({thread.owner_id})"
+
 
     url = _thread_url(thread)
-
     tag_names = _tags_from_thread(thread)
     field_tag = [tag for tag in tag_names if tag in FIELD_TAG]
     status_tag = [STATUS_TAG_LABEL[tag] for tag in tag_names if tag in STATUS_TAG_LABEL]
@@ -201,12 +185,10 @@ async def _transfer_issue_to_slack(
         send_to_slack_message,
         webhook_url=config.slack_webhook_url,
         title=thread.name,
-        content=content,
         author=author,
         url=url,
         forum_name=parent.name,
         tags=tag_names,
-        attachment_urls=attachment_urls,
     )
     await asyncio.to_thread(
         send_to_trigger_webhook,
@@ -290,7 +272,6 @@ def run_bot(config: Config | None = None) -> None:
     async def on_thread_create(thread: Thread):
         try:
             await _transfer_issue_to_slack(thread, cfg)
-            logger.info("전송 완료: 스레드 %s, 제목: %s → Slack", thread.id, thread.name)
         except Exception:
             logger.exception(
                 "전송 실패: 스레드 %s, 제목: %s → Slack",
