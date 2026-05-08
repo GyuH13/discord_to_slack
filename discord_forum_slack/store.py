@@ -6,7 +6,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_STORE_PATH = Path(__file__).resolve().parent.parent / "thread_links.json"
+_STORE_PATH = Path("/app/data/thread_links.json")
 
 
 def _load() -> dict[str, str]:

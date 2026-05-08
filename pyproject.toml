@@ -13,6 +13,7 @@ dependencies = [
     "PyYAML>=6.0",
     "requests>=2.31.0",
     "brotli>=1.1.0",
+    "slack_bolt>=1.18.0",
 ]
 
 [project.scripts]
