@@ -1,19 +1,20 @@
-"""Discord Bot Client."""
+"""Discord 봇."""
 
 import asyncio
 import logging
 
 import discord
-from discord import app_commands, Thread
+from discord import Thread
 
+from . import store
 from .config import Config, load_config
-from .slack import send_to_slack_message, send_to_trigger_webhook
+from .msg_sender import post_message, post_webhook
+from .slack_list import sync_list
 
 logger = logging.getLogger(__name__)
 
-# --- Constants ---
-FIELD_TAG = ["dynamixel", "ai-worker", "omy", "omx", "hand","turtlebot","others"]
-STATUS_TAG_LABEL: dict[str, str] = {
+PRODUCT_TAGS: set[str] = {"dynamixel", "ai-worker", "omy", "omx", "hand", "turtlebot", "others"}
+STATUS_LABELS: dict[str, str] = {
     "🟢New": "New Issue",
     "🟡Handling": "Handling",
     "✅Solved": "Complete",
@@ -22,66 +23,50 @@ STATUS_TAG_LABEL: dict[str, str] = {
     "Solved": "Complete",
 }
 
-# --- Client ---
+
 def _create_client() -> discord.Client:
-    """create discord client with configured intents."""
     intents = discord.Intents.default()
     intents.message_content = True
     intents.guilds = True
     return discord.Client(intents=intents)
 
-# --- Forum/Thread helpers ---
-def _tags_from_thread(t: discord.Thread) -> list[str]:
-    out: list[str] = []
-    applied = getattr(t, "applied_tags", None) or []
-    for tag in applied:
-        if name := getattr(tag, "name", None):
-            out.append(name)
-    return out
 
-def _check_thread_valid(parent: discord.ForumChannel) -> bool:
-    """check if thread is valid."""
-    return parent is not None and isinstance(parent, discord.ForumChannel)
-
-def _check_target_channel(parent: discord.ForumChannel, config: Config) -> bool:
-    """check if parent is in the list of forum channel ids."""
-    return config.forum_channel_ids and str(parent.id) in config.forum_channel_ids
+def _get_tags(thread: discord.Thread) -> list[str]:
+    applied = getattr(thread, "applied_tags", None) or []
+    return [name for tag in applied if (name := getattr(tag, "name", None))]
 
 
-def _thread_url(thread: Thread) -> str:
-    """Discord 스레드 링크 URL."""
+def _split_tags(tag_names: list[str]) -> tuple[list[str], list[str]]:
+    product_tags = [t for t in tag_names if t in PRODUCT_TAGS]
+    status_tags = [STATUS_LABELS[t] for t in tag_names if t in STATUS_LABELS]
+    return product_tags, status_tags
+
+
+def _is_forum_thread(parent: discord.abc.GuildChannel | None) -> bool:
+    return isinstance(parent, discord.ForumChannel)
+
+
+def _is_target_channel(parent: discord.ForumChannel, config: Config) -> bool:
+    return bool(config.forum_channel_ids) and str(parent.id) in config.forum_channel_ids
+
+
+def _discord_url(thread: Thread) -> str:
     return f"https://discord.com/channels/{thread.guild.id}/{thread.id}"
 
-# --- Slack transfer ---
-async def _send_thread_to_slack_message_only(thread: Thread, config: Config) -> None:
-    """해당 스레드를 Slack 메시지로만 전송 (트리거 웹후크 없음). 포럼 스레드에서만 가능."""
-    parent = thread.parent
-    if not _check_thread_valid(parent):
-        raise ValueError("이 채널은 포럼 스레드가 아닙니다.")
-    author = "unknown"
+
+async def _fetch_author(thread: Thread) -> str:
     try:
         async for msg in thread.history(limit=1, oldest_first=True):
             u = msg.author
-            author = f"{getattr(u, 'display_name', None)} ({u})"
-            break
+            return f"{getattr(u, 'display_name', None)} ({u})"
     except discord.DiscordException:
-        if thread.owner_id:
-            author = f"알 수 없음 ({thread.owner_id})"
-    url = _thread_url(thread)
-    tag_names = _tags_from_thread(thread)
-    await asyncio.to_thread(
-        send_to_slack_message,
-        webhook_url=config.slack_webhook_url,
-        title=thread.name,
-        author=author,
-        url=url,
-        forum_name=parent.name,
-        tags=tag_names,
-    )
+        pass
+    if thread.owner_id:
+        return f"Unknown ({thread.owner_id})"
+    return "unknown"
 
 
-async def _get_all_threads(client: discord.Client, config: Config) -> list[Thread]:
-    """Return all threads in the forum channels specified in the config."""
+async def _fetch_threads(client: discord.Client, config: Config) -> list[Thread]:
     threads: list[Thread] = []
     for cid in config.forum_channel_ids:
         try:
@@ -92,191 +77,89 @@ async def _get_all_threads(client: discord.Client, config: Config) -> list[Threa
             continue
         threads.extend(channel.threads)
         try:
-            async for thread in channel.archived_threads(limit=500):
+            async for thread in channel.archived_threads(limit=None):
                 threads.append(thread)
         except discord.DiscordException:
             pass
     return threads
 
 
-async def _sync_issue_table(client: discord.Client, config: Config) -> int:
-    """synchronize issue table in slack."""
-    if not config.trigger_webhook_url:
-        return 0
-    threads = await _get_all_threads(client, config)
-    logger.info("sync-issue-table: found %s threads", len(threads))
-    sent = 0
+async def get_open_issues(client: discord.Client, config: Config) -> list[dict]:
+    """Solved 제외한 전체 스레드를 리스트 동기화용 dict로 반환."""
+    threads = await _fetch_threads(client, config)
+    result = []
     for thread in threads:
-        try:
-            parent = thread.parent
-            if not _check_thread_valid(parent):
-                logger.info("skip thread %s: parent invalid or not forum channel", thread.id)
-                continue
-            if not _check_target_channel(parent, config):
-                logger.info("skip thread %s: parent channel %s not in config", thread.id, parent.id if parent else None)
-                continue
-            url = _thread_url(thread)
-            tag_names = _tags_from_thread(thread)
-            field_tag = [tag for tag in tag_names if tag in FIELD_TAG]
-            status_tag = [STATUS_TAG_LABEL[tag] for tag in tag_names if tag in STATUS_TAG_LABEL]
-            last_error: Exception | None = None
-            for attempt in range(3):
-                try:
-                    await asyncio.to_thread(
-                        send_to_trigger_webhook,
-                        webhook_url=config.trigger_webhook_url,
-                        title=thread.name,
-                        url=url,
-                        field_tag=field_tag,
-                        status_tag=status_tag,
-                        created_at=thread.created_at,
-                    )
-                    sent += 1
-                    if attempt > 0:
-                        logger.info("thread %s succeeded on retry %s", thread.id, attempt + 1)
-                    break
-                except Exception as e:
-                    last_error = e
-                    logger.warning("sync attempt %s/3 failed for thread %s (%s): %s", attempt + 1, thread.id, thread.name, e)
-                    if attempt < 2:
-                        delay = 5.0 if "429" in str(e) else 2.0
-                        await asyncio.sleep(delay)
-            else:
-                logger.warning("sync gave up for thread %s (%s): %s", thread.id, thread.name, last_error)
-            await asyncio.sleep(1.5)
-        except Exception as e:
-            logger.warning("sync failed for thread %s (%s): %s", thread.id, thread.name, e)
-            if "429" in str(e):
-                await asyncio.sleep(2.0)
-            await asyncio.sleep(1.5)
-    logger.info("sync-issue-table done: sent=%s total_threads=%s", sent, len(threads))
-    return sent
+        parent = thread.parent
+        if not _is_forum_thread(parent) or not _is_target_channel(parent, config):
+            continue
+        _, status_tags = _split_tags(_get_tags(thread))
+        if "Complete" in status_tags:
+            continue
+        result.append({
+            "title": thread.name,
+            "status": status_tags[0] if status_tags else "New Issue",
+            "url": _discord_url(thread),
+            "created_at": thread.created_at,
+            "slack_msg_url": store.get_link(thread.id),
+        })
+    return result
 
 
-async def _transfer_issue_to_slack(
-    thread: Thread,
-    config: Config,
-) -> None:
-    """transfer issue to slack."""
-
-    # Check Validity
+async def _handle_new_thread(thread: Thread, config: Config, client: discord.Client) -> None:
     parent = thread.parent
-    if not _check_thread_valid(parent) or not _check_target_channel(parent, config):
+    if not _is_forum_thread(parent) or not _is_target_channel(parent, config):
         return
 
-    # Get Author Name and ID
-    author = "unknown"
-    try:
-        async for msg in thread.history(limit=1, oldest_first=True):
-            u = msg.author
-            author = f"{getattr(u, 'display_name', None)} ({u})"
-            break
-    except discord.DiscordException:
-        if thread.owner_id:
-            author = f"Unknown ({thread.owner_id})"
+    author = await _fetch_author(thread)
+    url = _discord_url(thread)
+    tags = _get_tags(thread)
+    product_tags, status_tags = _split_tags(tags)
 
-
-    url = _thread_url(thread)
-    tag_names = _tags_from_thread(thread)
-    field_tag = [tag for tag in tag_names if tag in FIELD_TAG]
-    status_tag = [STATUS_TAG_LABEL[tag] for tag in tag_names if tag in STATUS_TAG_LABEL]
-
-    await asyncio.to_thread(
-        send_to_slack_message,
-        webhook_url=config.slack_webhook_url,
+    permalink = await asyncio.to_thread(
+        post_message,
+        slack_bot_token=config.slack_bot_token,
+        channel_id=config.slack_channel_id,
         title=thread.name,
         author=author,
         url=url,
         forum_name=parent.name,
-        tags=tag_names,
+        tags=tags,
     )
+    store.set_link(thread.id, permalink)
+
     await asyncio.to_thread(
-        send_to_trigger_webhook,
+        post_webhook,
         webhook_url=config.trigger_webhook_url,
         title=thread.name,
         url=url,
-        field_tag=field_tag,
-        status_tag=status_tag,
+        field_tag=product_tags,
+        status_tag=status_tags,
         created_at=thread.created_at,
     )
 
+    if config.slack_bot_token and config.list_id:
+        issues = await get_open_issues(client, config)
+        await asyncio.to_thread(
+            sync_list,
+            slack_bot_token=config.slack_bot_token,
+            list_id=config.list_id,
+            threads=issues,
+        )
 
-# --- Bot entry ---
-def run_bot(config: Config | None = None) -> None:
-    """run bot."""
-    cfg = config or load_config()
 
+def create_bot(config: Config) -> discord.Client:
+    cfg = config
     client = _create_client()
-    tree = app_commands.CommandTree(client)
-
-    @tree.command(name="send-this-thread-to-slack", description="이 스레드를 Slack 메시지로 전송합니다")
-    async def send_this_thread_to_slack(interaction: discord.Interaction) -> None:
-        if not isinstance(interaction.channel, Thread):
-            await interaction.response.send_message(
-                "이 명령은 포럼 스레드 안에서만 사용할 수 있습니다.",
-                ephemeral=True,
-            )
-            return
-        if not cfg.slack_webhook_url:
-            await interaction.response.send_message(
-                "Slack 웹후크 URL이 설정되지 않았습니다. 관리자에게 문의하세요.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.defer(ephemeral=True)
-        try:
-            await _send_thread_to_slack_message_only(interaction.channel, cfg)
-            await interaction.followup.send(
-                "Slack 메시지로 전송했습니다.",
-                ephemeral=True,
-            )
-        except Exception as e:
-            await interaction.followup.send(
-                f"전송 중 오류: {e}",
-                ephemeral=True,
-            )
-
-    @tree.command(name="sync-issue-table", description="포럼 채널 전체 글을 슬랙의 장표에 동기화합니다")
-    async def sync_issue_table(interaction: discord.Interaction) -> None:
-        if cfg.sync_command_user_ids and str(interaction.user.id) not in cfg.sync_command_user_ids:
-            await interaction.response.send_message(
-                "이 명령을 실행할 권한이 없습니다.",
-                ephemeral=True,
-            )
-            return
-        if not cfg.trigger_webhook_url:
-            await interaction.response.send_message(
-                "트리거 웹후크 URL이 설정되지 않았습니다. 관리자에게 문의하세요.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.defer(ephemeral=True)
-        try:
-            count = await _sync_issue_table(interaction.client, cfg)
-            await interaction.followup.send(
-                f"동기화 완료: {count}개 스레드를 장표로 전송했습니다.",
-                ephemeral=True,
-            )
-        except Exception as e:
-            await interaction.followup.send(
-                f"동기화 중 오류: {e}",
-                ephemeral=True,
-            )
 
     @client.event
-    async def on_ready():
-        await tree.sync()
+    async def on_ready() -> None:
         print(f"Bot logged in: {client.user}")
 
     @client.event
-    async def on_thread_create(thread: Thread):
+    async def on_thread_create(thread: Thread) -> None:
         try:
-            await _transfer_issue_to_slack(thread, cfg)
+            await _handle_new_thread(thread, cfg, client)
         except Exception:
-            logger.exception(
-                "전송 실패: 스레드 %s, 제목: %s → Slack",
-                thread.id,
-                thread.name,
-            )
+            logger.exception("처리 실패: 스레드 %s (%s)", thread.id, thread.name)
 
-    client.run(cfg.discord_token)
+    return client

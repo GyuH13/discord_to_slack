@@ -1,16 +1,44 @@
-# Discord 봇 토큰 (Developer Portal → Bot → Reset Token)
+# -------------------------------------------------------
+# Discord
+# -------------------------------------------------------
+
+# Discord 봇 토큰
+# Developer Portal → 앱 선택 → Bot → Reset Token
 discord_token: ""
 
-# Slack Incoming Webhook URL
-slack_webhook_url: ""
-
-# 전송할 포럼 채널 ID 목록. 비우면 모든 포럼이 대상
+# 전송할 포럼 채널 ID 목록
 # Discord 개발자 모드 켜고 포럼 채널 우클릭 → 채널 ID 복사
 forum_channel_ids: []
 
-# 트리거 웹후크 URL (장표 작성용). 비우면 트리거 전송 안 함
+# -------------------------------------------------------
+# Slack
+# -------------------------------------------------------
+
+# 메시지를 전송할 Slack 채널 ID
+# Slack 채널 우클릭 → 채널 세부 정보 보기 → 하단 채널 ID 복사
+slack_channel_id: ""
+
+# Slack Bot Token — 메시지 전송 및 캔버스 API 호출에 사용
+# api.slack.com/apps → 앱 선택 → OAuth & Permissions → Bot User OAuth Token
+slack_bot_token: "xoxb-..."
+
+# Slack App-Level Token — Socket Mode 연결에 사용
+# api.slack.com/apps → 앱 선택 → Basic Information → App-Level Tokens
+# connections:write scope 필요
+slack_app_token: "xapp-..."
+
+# 업데이트할 Slack List ID
+# List 열기 → 우상단 점 세 개 → 링크 복사 → URL에서 /lists/ 뒤 부분
+list_id: ""
+
+
+
+# -------------------------------------------------------
+# 기타
+# -------------------------------------------------------
+
+# 트리거 웹후크 URL. 비우면 전송 안 함
 trigger_webhook_url: ""
 
-# /sync-forum 명령 허용 Discord 유저 ID 목록. 비우면 서버 내 누구나 실행 가능
-# 본인만 허용하려면: [ "내디스코드유저ID" ]
+# /sync-canvas 명령 허용 Discord 유저 ID 목록. 비우면 누구나 실행 가능
 # sync_command_user_ids: []
