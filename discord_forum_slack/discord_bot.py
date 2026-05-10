@@ -13,6 +13,8 @@ from . import store
 
 logger = logging.getLogger(__name__)
 
+_sync_lock = asyncio.Lock()
+
 PRODUCT_TAGS: set[str] = {"dynamixel", "ai-worker", "omy", "omx", "hand", "turtlebot", "others"}
 STATUS_LABELS: dict[str, str] = {
     "🟢New": "New Issue",
@@ -105,6 +107,20 @@ async def get_open_issues(client: discord.Client, config: Config) -> list[dict]:
     return result
 
 
+async def run_sync_list(config: Config, issues: list[dict]) -> None:
+    """sync_list를 lock으로 감싸 동시 실행을 방지합니다."""
+    if _sync_lock.locked():
+        logger.info("sync_list 이미 실행 중 — 완료 후 재실행")
+    async with _sync_lock:
+        await asyncio.to_thread(
+            sync_list,
+            slack_bot_token=config.slack_bot_token,
+            slack_user_token=config.slack_user_token,
+            list_id=config.list_id,
+            threads=issues,
+        )
+
+
 async def _handle_new_thread(thread: Thread, config: Config, client: discord.Client) -> None:
     parent = thread.parent
     if not _is_forum_thread(parent) or not _is_target_channel(parent, config):
@@ -141,13 +157,7 @@ async def _handle_new_thread(thread: Thread, config: Config, client: discord.Cli
 
     if config.slack_user_token and config.list_id:
         issues = await get_open_issues(client, config)
-        await asyncio.to_thread(
-            sync_list,
-            slack_bot_token=config.slack_bot_token,
-            slack_user_token=config.slack_user_token,
-            list_id=config.list_id,
-            threads=issues,
-        )
+        await run_sync_list(config, issues)
 
 
 def create_discord_bot(config: Config) -> discord.Client:
