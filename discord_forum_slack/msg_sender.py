@@ -19,12 +19,19 @@ def _escape(text: str) -> str:
 
 
 def _post(url: str, payload: dict) -> None:
+    headers = {"Content-Type": "application/json"}
     for attempt in range(_RETRY_COUNT):
-        resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
+        resp = requests.post(url, json=payload, headers=headers, timeout=10)
         if resp.ok:
             return
         if attempt < _RETRY_COUNT - 1:
-            logger.warning("webhook attempt %s/%s failed (%s): %s", attempt + 1, _RETRY_COUNT, resp.status_code, resp.text)
+            logger.warning(
+                "webhook 시도 %s/%s 실패 (%s): %s",
+                attempt + 1,
+                _RETRY_COUNT,
+                resp.status_code,
+                resp.text,
+            )
             time.sleep(_RETRY_DELAY)
         else:
             resp.raise_for_status()
@@ -78,7 +85,7 @@ def post_message(
         except SlackApiError as e:
             last_error = e
             if attempt < _RETRY_COUNT - 1:
-                logger.warning("post_message attempt %s/%s failed: %s", attempt + 1, _RETRY_COUNT, e)
+                logger.warning("post_message 시도 %s/%s 실패: %s", attempt + 1, _RETRY_COUNT, e)
                 time.sleep(_RETRY_DELAY)
     raise last_error
 
@@ -92,12 +99,11 @@ def post_webhook(
     status_tag: list[str] | None = None,
     created_at: datetime,
 ) -> None:
-    created_at_kst = created_at.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M (KST)")
     payload = {
         "title": title,
         "url": url,
         "field_tag": ", ".join(field_tag or []),
         "status_tag": status_tag,
-        "created_at": created_at_kst,
+        "created_at": created_at.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M (KST)"),
     }
     _post(webhook_url, payload)

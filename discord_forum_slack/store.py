@@ -14,13 +14,17 @@ def _load() -> dict[str, str]:
         return {}
     try:
         with open(_STORE_PATH, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.warning("thread_links.json load failed: %s", e)
+            data = json.load(f)
+            if not isinstance(data, dict):
+                return {}
+            return {str(k): str(v) for k, v in data.items()}
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
+        logger.warning("thread_links.json 읽기 실패: %s", e)
         return {}
 
 
 def _save(data: dict[str, str]) -> None:
+    _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(_STORE_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 

@@ -7,8 +7,8 @@ import discord
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 
-from .bot import get_open_issues
 from .config import Config
+from .discord_bot import get_open_issues
 from .slack_list import sync_list
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 def create_slack_bot(config: Config, discord_client: discord.Client) -> AsyncSocketModeHandler:
     app = AsyncApp(token=config.slack_bot_token)
 
-    @app.command("/sync-list")
+    @app.command("/table_update")
     async def handle_sync(ack, respond) -> None:
         await ack()
 
@@ -31,6 +31,7 @@ def create_slack_bot(config: Config, discord_client: discord.Client) -> AsyncSoc
             await asyncio.to_thread(
                 sync_list,
                 slack_bot_token=config.slack_bot_token,
+                slack_user_token=config.slack_user_token,
                 list_id=config.list_id,
                 threads=issues,
             )

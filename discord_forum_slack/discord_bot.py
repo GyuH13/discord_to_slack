@@ -6,10 +6,10 @@ import logging
 import discord
 from discord import Thread
 
-from . import store
-from .config import Config, load_config
+from .config import Config
 from .msg_sender import post_message, post_webhook
 from .slack_list import sync_list
+from . import store
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +85,9 @@ async def _fetch_threads(client: discord.Client, config: Config) -> list[Thread]
 
 
 async def get_open_issues(client: discord.Client, config: Config) -> list[dict]:
-    """Solved 제외한 전체 스레드를 리스트 동기화용 dict로 반환."""
+    """Solved(Complete)가 아닌 스레드를 Slack List 동기화용 dict로 반환합니다."""
     threads = await _fetch_threads(client, config)
-    result = []
+    result: list[dict] = []
     for thread in threads:
         parent = thread.parent
         if not _is_forum_thread(parent) or not _is_target_channel(parent, config):
@@ -115,45 +115,48 @@ async def _handle_new_thread(thread: Thread, config: Config, client: discord.Cli
     tags = _get_tags(thread)
     product_tags, status_tags = _split_tags(tags)
 
-    permalink = await asyncio.to_thread(
-        post_message,
-        slack_bot_token=config.slack_bot_token,
-        channel_id=config.slack_channel_id,
-        title=thread.name,
-        author=author,
-        url=url,
-        forum_name=parent.name,
-        tags=tags,
-    )
-    store.set_link(thread.id, permalink)
+    if config.slack_bot_token and config.slack_channel_id:
+        permalink = await asyncio.to_thread(
+            post_message,
+            slack_bot_token=config.slack_bot_token,
+            channel_id=config.slack_channel_id,
+            title=thread.name,
+            author=author,
+            url=url,
+            forum_name=parent.name,
+            tags=tags,
+        )
+        store.set_link(thread.id, permalink)
 
-    await asyncio.to_thread(
-        post_webhook,
-        webhook_url=config.trigger_webhook_url,
-        title=thread.name,
-        url=url,
-        field_tag=product_tags,
-        status_tag=status_tags,
-        created_at=thread.created_at,
-    )
+    if config.trigger_webhook_url:
+        await asyncio.to_thread(
+            post_webhook,
+            webhook_url=config.trigger_webhook_url,
+            title=thread.name,
+            url=url,
+            field_tag=product_tags,
+            status_tag=status_tags,
+            created_at=thread.created_at,
+        )
 
-    if config.slack_bot_token and config.list_id:
+    if config.slack_user_token and config.list_id:
         issues = await get_open_issues(client, config)
         await asyncio.to_thread(
             sync_list,
             slack_bot_token=config.slack_bot_token,
+            slack_user_token=config.slack_user_token,
             list_id=config.list_id,
             threads=issues,
         )
 
 
-def create_bot(config: Config) -> discord.Client:
+def create_discord_bot(config: Config) -> discord.Client:
     cfg = config
     client = _create_client()
 
     @client.event
     async def on_ready() -> None:
-        print(f"Bot logged in: {client.user}")
+        logger.info("Discord 봇 로그인: %s", client.user)
 
     @client.event
     async def on_thread_create(thread: Thread) -> None:
