@@ -86,9 +86,13 @@ async def _fetch_threads(client: discord.Client, config: Config) -> list[Thread]
     return threads
 
 
-async def get_open_issues(client: discord.Client, config: Config) -> list[dict]:
-    """Solved(Complete)가 아닌 스레드를 Slack List 동기화용 dict로 반환합니다."""
+async def get_open_issues_and_counts(
+    client: discord.Client,
+    config: Config,
+) -> tuple[list[dict], dict[str, int]]:
+    """대상 포럼 전체 스레드 기준 상태 개수와, Slack List에 올릴 미해결 행을 한 번에 계산합니다."""
     threads = await _fetch_threads(client, config)
+    counts = {"solved": 0, "handling": 0, "new_issue": 0}
     result: list[dict] = []
     for thread in threads:
         parent = thread.parent
@@ -96,7 +100,12 @@ async def get_open_issues(client: discord.Client, config: Config) -> list[dict]:
             continue
         _, status_tags = _split_tags(_get_tags(thread))
         if "Complete" in status_tags:
+            counts["solved"] += 1
             continue
+        if "Handling" in status_tags:
+            counts["handling"] += 1
+        else:
+            counts["new_issue"] += 1
         result.append({
             "title": thread.name,
             "status": status_tags[0] if status_tags else "New Issue",
@@ -104,10 +113,20 @@ async def get_open_issues(client: discord.Client, config: Config) -> list[dict]:
             "created_at": thread.created_at,
             "slack_msg_url": store.get_link(thread.id),
         })
-    return result
+    return result, counts
 
 
-async def run_sync_list(config: Config, issues: list[dict]) -> None:
+async def get_open_issues(client: discord.Client, config: Config) -> list[dict]:
+    """미해결 스레드만 필요할 때 (개수는 버림)."""
+    issues, _ = await get_open_issues_and_counts(client, config)
+    return issues
+
+
+async def run_sync_list(
+    config: Config,
+    issues: list[dict],
+    status_counts: dict[str, int],
+) -> None:
     """sync_list를 lock으로 감싸 동시 실행을 방지합니다."""
     if _sync_lock.locked():
         logger.info("sync_list 이미 실행 중 — 완료 후 재실행")
@@ -118,6 +137,7 @@ async def run_sync_list(config: Config, issues: list[dict]) -> None:
             slack_user_token=config.slack_user_token,
             list_id=config.list_id,
             threads=issues,
+            status_counts=status_counts,
         )
 
 
@@ -156,8 +176,8 @@ async def _handle_new_thread(thread: Thread, config: Config, client: discord.Cli
         )
 
     if config.slack_user_token and config.list_id:
-        issues = await get_open_issues(client, config)
-        await run_sync_list(config, issues)
+        issues, counts = await get_open_issues_and_counts(client, config)
+        await run_sync_list(config, issues, counts)
 
 
 def create_discord_bot(config: Config) -> discord.Client:

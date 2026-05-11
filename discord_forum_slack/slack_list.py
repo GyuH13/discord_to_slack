@@ -63,6 +63,26 @@ def _get_schema(client: WebClient, list_id: str) -> tuple[dict[str, str], dict[s
     return column_ids, select_ids
 
 
+def _list_description_blocks(status_counts: dict[str, int]) -> list[dict]:
+    """slackLists.update 의 description_blocks 형식 (Block Kit rich_text)."""
+    text = (
+        f"✅Solved(완료): {status_counts['solved']}개 · "
+        f"🟡Handling: {status_counts['handling']}개 · "
+        f"🟢New Issue: {status_counts['new_issue']}개"
+    )
+    return [
+        {
+            "type": "rich_text",
+            "elements": [
+                {
+                    "type": "rich_text_section",
+                    "elements": [{"type": "text", "text": text}],
+                },
+            ],
+        },
+    ]
+
+
 def _as_rich_text_cell(content: str) -> list[dict]:
     return [
         {
@@ -105,6 +125,7 @@ def sync_list(
     slack_user_token: str = "",
     list_id: str,
     threads: list[dict],
+    status_counts: dict[str, int],
 ) -> None:
     client = WebClient(token=slack_user_token or slack_bot_token)
     column_ids, select_ids = _get_schema(client, list_id)
@@ -133,5 +154,16 @@ def sync_list(
         except SlackApiError as e:
             logger.warning("항목 생성 실패 (%s): %s", thread["title"], e)
         time.sleep(0.3)
+
+    try:
+        client.api_call(
+            "slackLists.update",
+            json={
+                "id": list_id,
+                "description_blocks": _list_description_blocks(status_counts),
+            },
+        )
+    except SlackApiError as e:
+        logger.warning("리스트 설명(slackLists.update) 실패: %s", e)
 
     logger.info("리스트 동기화 완료: %s개", len(threads))

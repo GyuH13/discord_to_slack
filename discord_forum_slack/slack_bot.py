@@ -7,7 +7,7 @@ from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 
 from .config import Config
-from .discord_bot import get_open_issues, run_sync_list
+from .discord_bot import get_open_issues_and_counts, run_sync_list
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +25,8 @@ def create_slack_bot(config: Config, discord_client: discord.Client) -> AsyncSoc
 
         await respond("리스트 동기화를 시작합니다...")
         try:
-            issues = await get_open_issues(discord_client, config)
-            await run_sync_list(config, issues)
+            issues, counts = await get_open_issues_and_counts(discord_client, config)
+            await run_sync_list(config, issues, counts)
             await respond(f"동기화 완료: {len(issues)}개 이슈를 반영했습니다.")
         except Exception as e:
             logger.exception("리스트 동기화 실패")
