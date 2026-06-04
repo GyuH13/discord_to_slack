@@ -11,7 +11,6 @@ requires-python = ">=3.10"
 dependencies = [
     "discord.py>=2.3.0",
     "PyYAML>=6.0",
-    "requests>=2.31.0",
     "brotli>=1.1.0",
     "slack_bolt>=1.18.0",
 ]

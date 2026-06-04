@@ -7,7 +7,7 @@ import discord
 from discord import Thread
 
 from .config import Config
-from .msg_sender import post_message, post_webhook
+from .msg_sender import post_message
 from .slack_list import sync_list
 from . import store
 
@@ -149,7 +149,6 @@ async def _handle_new_thread(thread: Thread, config: Config, client: discord.Cli
     author = await _fetch_author(thread)
     url = _discord_url(thread)
     tags = _get_tags(thread)
-    product_tags, status_tags = _split_tags(tags)
 
     if config.slack_bot_token and config.slack_channel_id:
         permalink = await asyncio.to_thread(
@@ -163,17 +162,6 @@ async def _handle_new_thread(thread: Thread, config: Config, client: discord.Cli
             tags=tags,
         )
         store.set_link(thread.id, permalink)
-
-    if config.trigger_webhook_url:
-        await asyncio.to_thread(
-            post_webhook,
-            webhook_url=config.trigger_webhook_url,
-            title=thread.name,
-            url=url,
-            field_tag=product_tags,
-            status_tag=status_tags,
-            created_at=thread.created_at,
-        )
 
     if config.slack_user_token and config.list_id:
         issues, counts = await get_open_issues_and_counts(client, config)

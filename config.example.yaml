@@ -31,14 +31,6 @@ slack_app_token: "xapp-..."
 # List 열기 → 우상단 점 세 개 → 링크 복사 → URL에서 /lists/ 뒤 부분
 list_id: ""
 
-
-
-# -------------------------------------------------------
-# 기타
-# -------------------------------------------------------
-
-# 트리거 웹후크 URL. 비우면 전송 안 함
-trigger_webhook_url: ""
-
-# /sync-canvas 명령 허용 Discord 유저 ID 목록. 비우면 누구나 실행 가능
-# sync_command_user_ids: []
+# Slack User Token — List API 동기화에 사용
+# api.slack.com/apps → 앱 선택 → OAuth & Permissions → User OAuth Token
+slack_user_token: "xoxp-..."

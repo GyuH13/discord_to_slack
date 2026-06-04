@@ -16,7 +16,6 @@ class Config:
     discord_token: str
     slack_channel_id: str
     forum_channel_ids: list[str]
-    trigger_webhook_url: str = ""
     slack_bot_token: str = ""
     slack_app_token: str = ""
     slack_user_token: str = ""
@@ -60,7 +59,6 @@ def load_config(path: str | Path | None = None) -> Config:
         for s in (data.get("forum_channel_ids") or [])
         if s
     ]
-    trigger_webhook_url = (data.get("trigger_webhook_url") or "").strip()
     slack_bot_token = (data.get("slack_bot_token") or "").strip()
     slack_app_token = (data.get("slack_app_token") or "").strip()
     slack_user_token = (data.get("slack_user_token") or "").strip()
@@ -69,7 +67,6 @@ def load_config(path: str | Path | None = None) -> Config:
         discord_token=discord_token,
         slack_channel_id=slack_channel_id,
         forum_channel_ids=forum_channel_ids,
-        trigger_webhook_url=trigger_webhook_url,
         slack_bot_token=slack_bot_token,
         slack_app_token=slack_app_token,
         slack_user_token=slack_user_token,
