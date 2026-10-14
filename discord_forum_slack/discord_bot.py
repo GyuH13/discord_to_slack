@@ -2,14 +2,15 @@
 
 import asyncio
 import logging
+from dataclasses import dataclass
 
 import discord
 from discord import Thread
 
+from . import store
 from .config import Config
 from .msg_sender import post_message
 from .slack_list import sync_list
-from . import store
 
 logger = logging.getLogger(__name__)
 
@@ -69,51 +70,76 @@ async def _fetch_author(thread: Thread) -> str:
 
 
 async def _fetch_threads(client: discord.Client, config: Config) -> list[Thread]:
-    threads: list[Thread] = []
-    for cid in config.forum_channel_ids:
+    if not config.forum_channel_ids:
+        raise RuntimeError("대상 포럼이 없어 동기화를 중단합니다.")
+    threads: dict[int, Thread] = {}
+    active_by_guild: dict[int, list[Thread]] = {}
+    for cid in dict.fromkeys(config.forum_channel_ids):
         try:
             channel = client.get_channel(int(cid)) or await client.fetch_channel(int(cid))
-        except (ValueError, discord.DiscordException):
-            continue
-        if not isinstance(channel, discord.ForumChannel):
-            continue
-        threads.extend(channel.threads)
-        try:
+            if not isinstance(channel, discord.ForumChannel):
+                raise ValueError("대상 채널이 포럼이 아닙니다.")
+            if channel.guild.id not in active_by_guild:
+                active_by_guild[channel.guild.id] = await channel.guild.active_threads()
+            for thread in active_by_guild[channel.guild.id]:
+                if thread.parent_id == channel.id:
+                    threads[thread.id] = thread
             async for thread in channel.archived_threads(limit=None):
-                threads.append(thread)
-        except discord.DiscordException:
-            pass
-    return threads
+                threads[thread.id] = thread
+        except (ValueError, discord.DiscordException) as e:
+            raise RuntimeError(
+                f"포럼 {cid} 조회가 불완전하여 동기화를 중단합니다. Slack 행은 유지됩니다.",
+            ) from e
+    return list(threads.values())
+
+
+@dataclass
+class IssueSnapshot:
+    issues: list[dict]
+    counts: dict[str, int]
+    solved_urls: set[str]
+
+
+async def _get_issue_snapshot(
+    client: discord.Client,
+    config: Config,
+) -> IssueSnapshot:
+    """대상 포럼 전체 스레드 기준 상태 개수와, Slack List에 올릴 미해결 행을 한 번에 계산합니다."""
+    threads = await _fetch_threads(client, config)
+    counts = {"solved": 0, "handling": 0, "new_issue": 0}
+    result: list[dict] = []
+    solved_urls: set[str] = set()
+    for thread in threads:
+        parent = thread.parent
+        if not _is_forum_thread(parent) or not _is_target_channel(parent, config):
+            raise RuntimeError("글의 대상 포럼을 확인할 수 없어 동기화를 중단합니다.")
+        _, status_tags = _split_tags(_get_tags(thread))
+        if "Complete" in status_tags:
+            counts["solved"] += 1
+            solved_urls.add(_discord_url(thread))
+            continue
+        if "Handling" in status_tags:
+            counts["handling"] += 1
+        else:
+            counts["new_issue"] += 1
+        result.append(
+            {
+                "title": thread.name,
+                "status": status_tags[0] if status_tags else "New Issue",
+                "url": _discord_url(thread),
+                "created_at": thread.created_at,
+                "slack_msg_url": store.get_link(thread.id),
+            }
+        )
+    return IssueSnapshot(result, counts, solved_urls)
 
 
 async def get_open_issues_and_counts(
     client: discord.Client,
     config: Config,
 ) -> tuple[list[dict], dict[str, int]]:
-    """대상 포럼 전체 스레드 기준 상태 개수와, Slack List에 올릴 미해결 행을 한 번에 계산합니다."""
-    threads = await _fetch_threads(client, config)
-    counts = {"solved": 0, "handling": 0, "new_issue": 0}
-    result: list[dict] = []
-    for thread in threads:
-        parent = thread.parent
-        if not _is_forum_thread(parent) or not _is_target_channel(parent, config):
-            continue
-        _, status_tags = _split_tags(_get_tags(thread))
-        if "Complete" in status_tags:
-            counts["solved"] += 1
-            continue
-        if "Handling" in status_tags:
-            counts["handling"] += 1
-        else:
-            counts["new_issue"] += 1
-        result.append({
-            "title": thread.name,
-            "status": status_tags[0] if status_tags else "New Issue",
-            "url": _discord_url(thread),
-            "created_at": thread.created_at,
-            "slack_msg_url": store.get_link(thread.id),
-        })
-    return result, counts
+    snapshot = await _get_issue_snapshot(client, config)
+    return snapshot.issues, snapshot.counts
 
 
 async def get_open_issues(client: discord.Client, config: Config) -> list[dict]:
@@ -124,21 +150,23 @@ async def get_open_issues(client: discord.Client, config: Config) -> list[dict]:
 
 async def run_sync_list(
     config: Config,
-    issues: list[dict],
-    status_counts: dict[str, int],
-) -> None:
-    """sync_list를 lock으로 감싸 동시 실행을 방지합니다."""
+    client: discord.Client,
+) -> int:
+    """조회부터 동기화까지 직렬화하여 오래된 스냅샷의 덮어쓰기를 방지합니다."""
     if _sync_lock.locked():
         logger.info("sync_list 이미 실행 중 — 완료 후 재실행")
     async with _sync_lock:
+        snapshot = await _get_issue_snapshot(client, config)
         await asyncio.to_thread(
             sync_list,
             slack_bot_token=config.slack_bot_token,
             slack_user_token=config.slack_user_token,
             list_id=config.list_id,
-            threads=issues,
-            status_counts=status_counts,
+            threads=snapshot.issues,
+            status_counts=snapshot.counts,
+            solved_urls=snapshot.solved_urls,
         )
+        return len(snapshot.issues)
 
 
 async def _handle_new_thread(thread: Thread, config: Config, client: discord.Client) -> None:
@@ -164,8 +192,7 @@ async def _handle_new_thread(thread: Thread, config: Config, client: discord.Cli
         store.set_link(thread.id, permalink)
 
     if config.slack_user_token and config.list_id:
-        issues, counts = await get_open_issues_and_counts(client, config)
-        await run_sync_list(config, issues, counts)
+        await run_sync_list(config, client)
 
 
 def create_discord_bot(config: Config) -> discord.Client:

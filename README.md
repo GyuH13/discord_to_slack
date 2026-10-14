@@ -10,6 +10,9 @@ Discord 포럼 채널에 새 글이 올라오면 해당 내용을 Slack으로 �
 
 ## 준비물
 
+> 아래 웹후크 설치 안내는 이전 버전 기준입니다. 현재 실행 설정은
+> `config.example.yaml`의 Slack Bot/App/User Token과 `list_id`를 사용합니다.
+
 1. **Discord 봇**
 2. **Slack Incoming Webhook URL**
 
@@ -91,3 +94,31 @@ python -m discord_forum_slack   # 프로젝트 루트에서 실행
   `config.yaml`의 `slack_webhook_url`이 맞는지, 해당 Slack 앱/채널에 웹후크가 연결돼 있는지 확인하세요.
 - **특정 포럼만 안 옴**  
   봇이 그 포럼 채널을 볼 수 있는지, 채널 ID가 `forum_channel_ids`에 정확히 들어갔는지 확인하세요.
+
+## Slack List 동기화와 assign
+
+대상 포럼에 새 글이 생성되거나 Slack에서 `/table_update`를 실행하면 동기화합니다.
+기존 글의 상태 태그 변경은 `/table_update`로 반영할 수 있습니다.
+
+- `Link` 열의 Discord 서버 ID와 글 ID로 기존 행을 찾습니다. 이 열은 식별용으로 유지하세요.
+- 새 글은 행을 추가하고, 기존 글은 봇이 관리하는 제목·상태·메시지 링크·글 링크·작성일 중
+  변경된 셀만 수정합니다. 기존 행 ID는 유지됩니다.
+- `assign` 등 수동으로 추가한 열은 수정하지 않습니다. Slack List 맨 오른쪽에
+  `assign` 열을 추가하고 기본값을 비워두면 새 행의 담당자도 빈칸으로 시작합니다.
+  사람 선택형과 일반 선택형 모두 기존 값을 보존합니다.
+- Discord에서 `Solved` / `✅Solved`로 확인된 글만 행을 삭제합니다. 조회에서 빠진 글이나
+  Discord 글 링크가 없는 수동 행은 삭제하지 않습니다.
+- 해결된 글의 행을 삭제하면 그 행의 담당자도 사라집니다. 다시 미해결 상태가 되면 새 행으로
+  추가되므로 이전 담당자는 복원되지 않습니다.
+- Discord 포럼 또는 보관된 글 조회가 실패하면 Slack 변경 없이 동기화를 중단합니다.
+  Slack API 변경 도중 실패하면 이미 성공한 변경은 남으며, 오류를 알리고 다음 동기화에서
+  현재 행을 다시 비교합니다.
+
+셀 수정은 [Slack Lists API](https://docs.slack.dev/reference/methods/slackLists.items.update/)를
+사용합니다. 빈 테이블의 스키마도 `slackLists.items.list`의 `include_list`로 조회합니다.
+
+회귀 테스트 실행(프로젝트 의존성 설치 후):
+
+```bash
+python -m unittest discover -s tests -v
+```
