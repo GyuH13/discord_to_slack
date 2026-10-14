@@ -7,5 +7,6 @@ build
 .git
 .gitignore
 config.yaml
+data
 .env
 .env.*

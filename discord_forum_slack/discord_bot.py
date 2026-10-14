@@ -97,7 +97,6 @@ async def _fetch_threads(client: discord.Client, config: Config) -> list[Thread]
 class IssueSnapshot:
     issues: list[dict]
     counts: dict[str, int]
-    solved_urls: set[str]
 
 
 async def _get_issue_snapshot(
@@ -108,7 +107,6 @@ async def _get_issue_snapshot(
     threads = await _fetch_threads(client, config)
     counts = {"solved": 0, "handling": 0, "new_issue": 0}
     result: list[dict] = []
-    solved_urls: set[str] = set()
     for thread in threads:
         parent = thread.parent
         if not _is_forum_thread(parent) or not _is_target_channel(parent, config):
@@ -116,7 +114,6 @@ async def _get_issue_snapshot(
         _, status_tags = _split_tags(_get_tags(thread))
         if "Complete" in status_tags:
             counts["solved"] += 1
-            solved_urls.add(_discord_url(thread))
             continue
         if "Handling" in status_tags:
             counts["handling"] += 1
@@ -131,7 +128,7 @@ async def _get_issue_snapshot(
                 "slack_msg_url": store.get_link(thread.id),
             }
         )
-    return IssueSnapshot(result, counts, solved_urls)
+    return IssueSnapshot(result, counts)
 
 
 async def get_open_issues_and_counts(
@@ -164,7 +161,6 @@ async def run_sync_list(
             list_id=config.list_id,
             threads=snapshot.issues,
             status_counts=snapshot.counts,
-            solved_urls=snapshot.solved_urls,
         )
         return len(snapshot.issues)
 
