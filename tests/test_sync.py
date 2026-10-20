@@ -12,6 +12,7 @@ import discord
 from slack_sdk.errors import SlackApiError
 
 from discord_forum_slack import assign_store, discord_bot, slack_list
+from discord_forum_slack.config import AutoSolveConfig
 
 URL = "https://discord.com/channels/10/20"
 SOLVED_URL = "https://discord.com/channels/10/30"
@@ -348,6 +349,7 @@ async def archived_result(threads=(), error=False):
 class DiscordSnapshotTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.config = SimpleNamespace(
+            auto_solve=AutoSolveConfig(),
             forum_channel_ids=["1"],
             slack_bot_token="test",
             slack_user_token="",
@@ -414,7 +416,7 @@ class DiscordSnapshotTests(unittest.IsolatedAsyncioTestCase):
         first_started, release = asyncio.Event(), asyncio.Event()
         snapshots = []
 
-        async def snapshot(*args):
+        async def snapshot(*args, **kwargs):
             snapshots.append(len(snapshots))
             return discord_bot.IssueSnapshot([], COUNTS)
 

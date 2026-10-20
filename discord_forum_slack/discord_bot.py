@@ -8,6 +8,7 @@ import discord
 from discord import Thread
 
 from . import store
+from .auto_solve import auto_solve_threads, has_solved_tag
 from .config import Config
 from .msg_sender import post_message
 from .slack_list import sync_list
@@ -102,9 +103,19 @@ class IssueSnapshot:
 async def _get_issue_snapshot(
     client: discord.Client,
     config: Config,
+    *,
+    apply_auto_solve: bool = False,
 ) -> IssueSnapshot:
     """대상 포럼 전체 스레드 기준 상태 개수와, Slack List에 올릴 미해결 행을 한 번에 계산합니다."""
     threads = await _fetch_threads(client, config)
+    if apply_auto_solve:
+        threads = await auto_solve_threads(
+            client,
+            threads,
+            config.auto_solve,
+            set(STATUS_LABELS),
+            config.forum_channel_ids,
+        )
     counts = {"solved": 0, "handling": 0, "new_issue": 0}
     result: list[dict] = []
     for thread in threads:
@@ -112,6 +123,13 @@ async def _get_issue_snapshot(
         if not _is_forum_thread(parent) or not _is_target_channel(parent, config):
             raise RuntimeError("글의 대상 포럼을 확인할 수 없어 동기화를 중단합니다.")
         _, status_tags = _split_tags(_get_tags(thread))
+        if config.auto_solve.enabled and (
+            str(thread.parent_id) == config.auto_solve.forum_channel_id
+            if config.auto_solve.forum_channel_id
+            else parent.name.casefold() == config.auto_solve.forum_channel_name.casefold()
+        ):
+            if has_solved_tag(thread, config.auto_solve):
+                status_tags = ["Complete"]
         if "Complete" in status_tags:
             counts["solved"] += 1
             continue
@@ -153,7 +171,7 @@ async def run_sync_list(
     if _sync_lock.locked():
         logger.info("sync_list 이미 실행 중 — 완료 후 재실행")
     async with _sync_lock:
-        snapshot = await _get_issue_snapshot(client, config)
+        snapshot = await _get_issue_snapshot(client, config, apply_auto_solve=True)
         await asyncio.to_thread(
             sync_list,
             slack_bot_token=config.slack_bot_token,
@@ -187,7 +205,7 @@ async def _handle_new_thread(thread: Thread, config: Config, client: discord.Cli
         )
         store.set_link(thread.id, permalink)
 
-    if config.slack_user_token and config.list_id:
+    if config.list_id:
         await run_sync_list(config, client)
 
 

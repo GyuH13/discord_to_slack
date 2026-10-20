@@ -10,6 +10,19 @@ discord_token: ""
 # Discord 개발자 모드 켜고 포럼 채널 우클릭 → 채널 ID 복사
 forum_channel_ids: []
 
+# 새 포럼 글 생성 또는 /table_update 실행 시 무응답 글 자동 완료
+# 기존 forum_channel_ids 안에서 support 포럼, ROBOTIS 역할, Solved 태그를 이름으로 찾습니다.
+auto_solve:
+  enabled: false  # 사용하려면 true
+  inactive_days: 14
+  forum_channel_name: "support"
+  robotis_role_name: "ROBOTIS"
+  solved_tag_name: "Solved"  # ✅Solved도 인식
+  # 이름이 중복되거나 이름 대신 ID로 지정하려면 아래 설정 사용
+  forum_channel_id: ""
+  robotis_role_id: ""
+  solved_tag_id: ""
+
 # -------------------------------------------------------
 # Slack
 # -------------------------------------------------------
