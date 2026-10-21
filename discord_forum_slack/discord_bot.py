@@ -2,12 +2,13 @@
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import discord
 from discord import Thread
 
-from . import store
+from . import progress, store
+from .auto_handling import auto_handle_threads, is_new
 from .auto_solve import auto_solve_threads, has_solved_tag, is_target_forum
 from .config import Config
 from .msg_sender import post_message
@@ -98,6 +99,7 @@ async def _fetch_threads(client: discord.Client, config: Config) -> list[Thread]
 class IssueSnapshot:
     issues: list[dict]
     counts: dict[str, int]
+    threads: list[Thread] = field(default_factory=list)
 
 
 async def _get_issue_snapshot(
@@ -105,10 +107,16 @@ async def _get_issue_snapshot(
     config: Config,
     *,
     apply_auto_solve: bool = False,
+    apply_handling: bool = False,
 ) -> IssueSnapshot:
     """대상 포럼 전체 스레드 기준 상태 개수와, Slack List에 올릴 미해결 행을 한 번에 계산합니다."""
+    progress.emit("fetch", "🔎 Discord 글 목록 조회 중")
     threads = await _fetch_threads(client, config)
+    progress.emit("fetch", f"✅ Discord 글 {len(threads)}개 조회 완료")
+    if apply_auto_solve or apply_handling:
+        progress.emit("status", "⏳ 직원 답변 이력·장기 무응답 검사 및 상태 처리 중")
     if apply_auto_solve:
+        progress.emit("solved", "⏳ 마지막 직원 답변 후 장기 무응답 글 검사 중")
         threads = await auto_solve_threads(
             client,
             threads,
@@ -116,6 +124,16 @@ async def _get_issue_snapshot(
             set(STATUS_LABELS),
             config.discord.forum_channel_ids,
         )
+        progress.emit(
+            "solved",
+            "✅ 자동 Solved 검사 완료" if config.auto_solve.enabled else "➖ 자동 Solved 기능 꺼짐",
+        )
+    if apply_handling:
+        progress.emit("handling", "⏳ 직원 답변 이력 확인 및 Handling 처리 중")
+        threads = await auto_handle_threads(
+            client, threads, config.auto_solve, config.discord.forum_channel_ids
+        )
+        progress.emit("handling", "✅ Handling 검사 완료")
     counts = {"solved": 0, "handling": 0, "new_issue": 0}
     result: list[dict] = []
     for thread in threads:
@@ -136,13 +154,13 @@ async def _get_issue_snapshot(
         result.append(
             {
                 "title": thread.name,
-                "status": status_tags[0] if status_tags else "New Issue",
+                "status": "Handling" if "Handling" in status_tags else "New Issue",
                 "url": _discord_url(thread),
                 "created_at": thread.created_at,
                 "slack_msg_url": store.get_link(thread.id),
             }
         )
-    return IssueSnapshot(result, counts)
+    return IssueSnapshot(result, counts, threads)
 
 
 async def get_open_issues_and_counts(
@@ -168,18 +186,32 @@ async def run_sync_list(
         return 0
     if _sync_lock.locked():
         logger.info("sync_list 이미 실행 중 — 완료 후 재실행")
+        progress.emit("queue", "⏳ 다른 테이블 동기화가 끝나기를 기다리는 중")
     async with _sync_lock:
-        snapshot = await _get_issue_snapshot(client, config, apply_auto_solve=True)
-        if config.table_sync.enabled:
-            await asyncio.to_thread(
-                sync_list,
-                slack_bot_token=config.slack.bot_token,
-                slack_user_token=config.slack.user_token,
-                list_id=config.table_sync.list_id,
-                threads=snapshot.issues,
-                status_counts=snapshot.counts,
-            )
+        progress.emit("queue", "✅ 동기화 작업 시작")
+        snapshot = await _sync_list_locked(config, client)
         return len(snapshot.issues)
+
+
+async def _sync_list_locked(config: Config, client: discord.Client) -> IssueSnapshot:
+    """호출자가 _sync_lock을 보유해야 한다. 갱신에 사용한 스냅샷을 그대로 반환한다."""
+    snapshot = await _get_issue_snapshot(client, config, apply_auto_solve=True, apply_handling=True)
+    counts = snapshot.counts
+    progress.emit(
+        "status",
+        f"✅ 상태 집계: Solved {counts['solved']} · "
+        f"Handling {counts['handling']} · New {counts['new_issue']}",
+    )
+    if config.table_sync.enabled:
+        await asyncio.to_thread(
+            sync_list,
+            slack_bot_token=config.slack.bot_token,
+            slack_user_token=config.slack.user_token,
+            list_id=config.table_sync.list_id,
+            threads=snapshot.issues,
+            status_counts=snapshot.counts,
+        )
+    return snapshot
 
 
 async def _handle_new_thread(thread: Thread, config: Config, client: discord.Client) -> None:
@@ -223,4 +255,32 @@ def create_discord_bot(config: Config) -> discord.Client:
         except Exception:
             logger.exception("처리 실패: 스레드 %s (%s)", thread.id, thread.name)
 
+    @client.event
+    async def on_message(message: discord.Message) -> None:
+        try:
+            await _handle_reply(message, cfg, client)
+        except Exception:
+            logger.exception("답변 처리 실패: 메시지 %s", message.id)
+
     return client
+
+
+async def _handle_reply(message: discord.Message, config: Config, client: discord.Client) -> None:
+    thread = message.channel
+    if (
+        message.author.bot
+        or message.webhook_id
+        or message.is_system()
+        or not isinstance(thread, discord.Thread)
+        or message.id == thread.id
+        or str(thread.parent_id) not in config.discord.forum_channel_ids
+        or not is_new(thread, config.auto_solve)
+    ):
+        return
+    async with _sync_lock:
+        updated = await auto_handle_threads(
+            client, [thread], config.auto_solve, config.discord.forum_channel_ids
+        )
+        changed = any(tag.name in {"Handling", "🟡Handling"} for tag in updated[0].applied_tags)
+    if changed and config.table_sync.enabled:
+        await run_sync_list(config, client)

@@ -3,7 +3,9 @@
 import logging
 import os
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 
@@ -34,6 +36,34 @@ class NotificationsConfig:
 class TableSyncConfig:
     enabled: bool = True
     list_id: str = ""
+
+
+@dataclass
+class WeeklyReportConfig:
+    enabled: bool = False
+    channel_id: str = ""  # 비우면 notifications.channel_id
+    weekday: str = "monday"
+    time: str = "10:00"
+    timezone: str = "Asia/Seoul"
+
+    def validate(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise ValueError("weekly_report.enabled는 true 또는 false여야 합니다.")
+        if self.weekday not in WEEKDAYS:
+            raise ValueError("weekly_report.weekday는 monday~sunday 중 하나여야 합니다.")
+        try:
+            parsed = datetime.strptime(self.time, "%H:%M")
+            if parsed.strftime("%H:%M") != self.time:
+                raise ValueError
+        except ValueError as exc:
+            raise ValueError("weekly_report.time은 HH:MM 형식이어야 합니다.") from exc
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("weekly_report.timezone이 올바르지 않습니다.") from exc
+
+
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
 
 @dataclass
@@ -74,6 +104,7 @@ class Config:
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     table_sync: TableSyncConfig = field(default_factory=TableSyncConfig)
     auto_solve: AutoSolveConfig = field(default_factory=AutoSolveConfig)
+    weekly_report: WeeklyReportConfig = field(default_factory=WeeklyReportConfig)
 
     def validate(self) -> None:
         for name in ("notifications", "table_sync"):
@@ -84,7 +115,8 @@ class Config:
         ids = self.discord.forum_channel_ids
         if not ids or any(not value.isdecimal() or int(value) <= 0 for value in ids):
             raise ValueError("discord.forum_channel_ids에 대상 포럼 ID 목록을 설정해주세요.")
-        if self.notifications.enabled or self.table_sync.enabled:
+        self.weekly_report.validate()
+        if self.notifications.enabled or self.table_sync.enabled or self.weekly_report.enabled:
             if not self.slack.bot_token:
                 raise ValueError("slack.bot_token이 설정되지 않았습니다.")
         if self.notifications.enabled and not self.notifications.channel_id:
@@ -95,6 +127,13 @@ class Config:
             if not self.table_sync.list_id:
                 raise ValueError("table_sync.list_id가 설정되지 않았습니다.")
         self.auto_solve.validate(ids)
+        if self.weekly_report.enabled:
+            if not self.table_sync.enabled:
+                raise ValueError("보고 전 테이블 갱신을 위해 table_sync.enabled를 켜주세요.")
+            if not (self.weekly_report.channel_id or self.notifications.channel_id):
+                raise ValueError("weekly_report.channel_id에 보고를 보낼 채널을 설정해주세요.")
+            if not self.table_sync.list_id:
+                raise ValueError("담당자 집계에 필요한 table_sync.list_id를 설정해주세요.")
 
 
 _LEGACY_KEYS = {
@@ -112,6 +151,7 @@ _SECTIONS = {
     "notifications": NotificationsConfig,
     "table_sync": TableSyncConfig,
     "auto_solve": AutoSolveConfig,
+    "weekly_report": WeeklyReportConfig,
 }
 
 

@@ -9,6 +9,7 @@ from slack_sdk import WebClient
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
 from . import assign_store
+from .progress import emit
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +222,7 @@ def sync_list(
     threads: list[dict],
     status_counts: dict[str, int],
 ) -> None:
+    emit("assign", "⏳ 기존 테이블과 assign 조회·검증 중")
     client = WebClient(token=slack_user_token or slack_bot_token)
     client.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=3))
     column_ids, select_ids, assign_column = _get_schema(client, list_id)
@@ -260,6 +262,7 @@ def sync_list(
     # 백업을 디스크에 완전히 저장한 뒤에만 첫 삭제를 실행한다.
     if assign_column:
         assign_store.save(list_id, assign_column["id"], assign_kind, assignments)
+    emit("assign", "✅ assign 백업 완료" if assign_column else "➖ assign 열 없음")
 
     logger.info(
         "전체 재작성 시작: 기존 %s행 삭제 → %s행 생성 (assign 백업: %s)",
@@ -267,18 +270,30 @@ def sync_list(
         len(planned),
         "완료" if assign_column else "열 없음",
     )
-    for item in existing:
+    emit("delete", f"⏳ 기존 행 삭제: 0/{len(existing)}")
+    for index, item in enumerate(existing, 1):
         client.api_call("slackLists.items.delete", json={"list_id": list_id, "id": item["id"]})
+        emit("delete", f"⏳ 기존 행 삭제: {index}/{len(existing)}")
         time.sleep(0.3)
-    for fields in planned:
+    emit("delete", f"✅ 기존 행 {len(existing)}개 삭제 완료")
+    if not planned:
+        emit("write_mid", "⏳ 새 행 작성: 0/0")
+    for index, fields in enumerate(planned, 1):
         client.api_call(
             "slackLists.items.create",
             json={"list_id": list_id, "initial_fields": fields},
         )
+        emit("write", f"⏳ 새 행 작성 및 assign 복원: {index}/{len(planned)}")
+        if index == max(1, len(planned) // 2):
+            emit("write_mid", "⏳ 테이블 재작성 진행 중")
         time.sleep(0.3)
+
+    emit("write", f"✅ 새 행 {len(planned)}개 작성 완료")
+    emit("write_mid", "✅ 테이블 행 재작성 완료")
 
     client.api_call(
         "slackLists.update",
         json={"id": list_id, "description_blocks": description},
     )
     logger.info("전체 재작성 완료: %s개 이슈, assign 복원", len(threads))
+    emit("table_done", "✅ 테이블 상태 집계 갱신 완료")
