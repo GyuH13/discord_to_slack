@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def create_slack_bot(config: Config, discord_client: discord.Client) -> AsyncSocketModeHandler:
-    app = AsyncApp(token=config.slack_bot_token)
+    app = AsyncApp(token=config.slack.bot_token)
 
     @app.command("/table_update")
     async def handle_sync(ack, respond) -> None:
@@ -31,4 +31,4 @@ def create_slack_bot(config: Config, discord_client: discord.Client) -> AsyncSoc
             logger.exception("리스트 동기화 실패")
             await respond(f"동기화 실패: {e}")
 
-    return AsyncSocketModeHandler(app, config.slack_app_token)
+    return AsyncSocketModeHandler(app, config.slack.app_token)

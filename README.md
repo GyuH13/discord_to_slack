@@ -1,99 +1,63 @@
-# Discord 포럼 → Slack 자동 전송
+# Discord 포럼 → Slack
 
-Discord 포럼 채널에 새 글이 올라오면 해당 내용을 Slack으로 자동 전송하는 봇입니다.
+Discord 포럼의 새 글을 Slack 채널에 알리고, 미해결 글을 Slack List에 동기화합니다.
+같은 트리거에서 직원 답변 후 오래 대화가 없는 글을 자동으로 Solved 처리할 수 있습니다.
 
-## 동작 방식
+## 설정
 
-- Discord 봇이 **포럼 채널에서 새 스레드(글) 생성** 시점을 감지합니다.
-- 해당 글의 **제목(스레드 이름)** 과 **첫 메시지 내용**, **작성자**, **포럼 이름**을 Slack으로 보냅니다.
-- 특정 포럼만 보내고 싶다면 `config.yaml`의 `forum_channel_ids`로 채널 ID를 지정할 수 있습니다.
+`config.example.yaml`을 `config.yaml`로 복사한 뒤 실제 값을 입력하세요.
 
-## 준비물
+| 설정 | 용도 |
+|------|------|
+| `discord.token` | Discord 봇 토큰 |
+| `discord.forum_channel_ids` | 세 기능이 함께 사용하는 포럼 ID 목록. 최소 1개 필요 |
+| `slack.bot_token` | Slack 메시지 전송 및 앱 인증 |
+| `slack.app_token` | `/table_update`를 수신하는 Socket Mode 연결 |
+| `slack.user_token` | Slack List API 토큰. 비우면 Bot Token 사용 |
+| `notifications.enabled` / `channel_id` | 새 글 알림 사용 여부와 수신 Slack 채널 |
+| `table_sync.enabled` / `list_id` | 테이블 동기화 사용 여부와 대상 Slack List |
+| `auto_solve.enabled` | 무응답 글 자동 완료 사용 여부. 기본 false |
+| `auto_solve.inactive_days` | 직원의 마지막 답변 이후 대기 일수. 기본 14 |
+| `auto_solve.robotis_role_name` | 직원 역할 이름. 기본 ROBOTIS |
+| `auto_solve.solved_tag_name` | 완료 태그 이름. 기본 Solved (`✅Solved`도 인식) |
 
-> 아래 웹후크 설치 안내는 이전 버전 기준입니다. 현재 실행 설정은
-> `config.example.yaml`의 Slack Bot/App/User Token과 `list_id`를 사용합니다.
+- 알림과 테이블 동기화는 기본적으로 켜져 있습니다. 각각 `enabled: false`로 끌 수 있습니다.
+- 알림만 켜면 Slack App/User Token과 List ID가 필요하지 않습니다.
+  자동 완료만 켜면 Slack 설정을 생략할 수 있습니다.
+- 테이블 동기화를 끄면 Socket Mode와 `/table_update` 수신도 중단합니다.
+  이때 자동 완료가 켜져 있으면 새 대상 포럼 글이 생성될 때만 검사합니다.
+- 새 글 알림이 실패해도 자동 완료와 테이블 동기화는 계속 실행합니다.
+- `assign` 열 이름, `/app/data` 저장 위치, 전체 재작성 방식은 코드와 Compose에서
+  고정합니다. 운영상 바꿀 필요가 있는 대상·활성화 여부·자동 완료 기준만 설정에 둡니다.
+- 이전 평면 키(`discord_token`, `forum_channel_ids`, `slack_*_token`,
+  `slack_channel_id`, `list_id`)도 읽을 수 있습니다. 이전 키와 대응하는 새 키를
+  동시에 쓰면 시작 전에 오류로 중단합니다. 알 수 없는 설정 키도 오류로 처리합니다.
+- 이전 `trigger_webhook_url`은 사용하지 않습니다. 읽을 때 경고만 남기며 새 설정에서 제거하세요.
+- 설정 변경 후 봇을 재시작해야 반영됩니다. 실제 토큰이 담긴 파일은 커밋하지 마세요.
 
-1. **Discord 봇**
-2. **Slack Incoming Webhook URL**
+## 준비 및 실행
 
----
+Discord Developer Portal에서 봇을 만들고 **MESSAGE CONTENT INTENT**를 켜세요.
+대상 포럼에 채널 보기·메시지 기록 보기 권한이 필요하며,
+자동 완료에는 **스레드 관리(Manage Threads)** 권한도 필요합니다.
+Discord 개발자 모드에서 각 포럼의 채널 ID를 복사해 목록에 넣으세요.
 
-## 1. Discord 봇 만들기
-
-1. [Discord Developer Portal](https://discord.com/developers/applications) → **New Application** → 이름 입력 후 생성.
-2. 왼쪽 **Bot** → **Add Bot** → 봇 생성.
-3. **Reset Token**으로 토큰 복사 후 `config.yaml`의 `discord_token`에 넣기 (절대 공개하지 마세요).
-4. **Privileged Gateway Intents**에서 아래를 켭니다.
-   - **MESSAGE CONTENT INTENT** (포럼 글 내용 읽기용)
-   - **SERVER MEMBERS INTENT**는 이 기능에는 필수 아님.
-5. **OAuth2 → URL Generator**에서:
-   - Scopes: `bot`
-   - Bot Permissions: `Read Messages/View Channels`, `Read Message History`
-   → 생성된 URL로 서버에 봇 초대.
-6. 포럼 채널이 있는 서버에 봇이 들어와 있고, 해당 채널을 봇이 **볼 수 있는 권한**이 있어야 합니다.
-
----
-
-## 2. Slack Incoming Webhook
-
-1. [Slack API](https://api.slack.com/apps) → **Create New App** → **From scratch** → 앱 이름과 워크스페이스 선택.
-2. **Incoming Webhooks** → **Activate Incoming Webhooks** 켜기.
-3. **Add New Webhook to Workspace** → 메시지를 받을 채널 선택 → **Webhook URL** 복사.
-4. `config.yaml`의 `slack_webhook_url`에 그 URL을 넣기.
-
----
-
-## 3. 포럼 채널 ID (선택)
-
-특정 포럼만 Slack으로 보내려면:
-
-1. Discord 설정에서 **개발자 모드** 켜기 (설정 → 앱 설정 → 고급).
-2. 해당 포럼 채널 우클릭 → **채널 ID 복사**.
-3. `config.yaml`의 `forum_channel_ids`에 채널 ID 목록으로 설정. 비우면 **모든 포럼 채널**이 대상입니다.
-
----
-
-## 4. 설치 및 실행
+Slack 앱의 Bot Token과 메시지를 받을 채널 ID를 설정하세요.
+테이블 동기화에는 Slack List 접근 권한이 있는 토큰과 List ID가 필요합니다.
+Socket Mode를 켜고 `connections:write` 권한의 App-Level Token을 설정한 뒤,
+앱에 `/table_update` 명령을 등록하세요.
 
 ```bash
 cp config.example.yaml config.yaml
-# config.yaml 에서 discord_token, slack_webhook_url (및 필요 시 forum_channel_ids) 수정
-
+# config.yaml에 실제 토큰과 대상 ID 입력
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-
-# 방법 1: 패키지로 설치 후 실행 (권장)
+source .venv/bin/activate
 pip install -e .
 python -m discord_forum_slack
-# 또는: discord-forum-slack
-
-# 방법 2: 의존성만 설치 후 실행
-pip install -r requirements.txt
-python -m discord_forum_slack   # 프로젝트 루트에서 실행
 ```
 
-설정 파일 경로: `CONFIG_PATH=/path/to/config.yaml python -m discord_forum_slack`
-
----
-
-## 설정 파일 (config.yaml) 요약
-
-| 키 | 필수 | 설명 |
-|------|------|------|
-| `discord_token` | ✅ | Discord 봇 토큰 |
-| `slack_webhook_url` | ✅ | Slack Incoming Webhook URL |
-| `forum_channel_ids` | ❌ | 전송할 포럼 채널 ID 목록. 비우면 전체 포럼 |
-
----
-
-## 트러블슈팅
-
-- **메시지 내용이 비어 옴**  
-  Discord Developer Portal에서 봇의 **MESSAGE CONTENT INTENT**가 켜져 있는지 확인하세요.
-- **Slack에 안 옴**  
-  `config.yaml`의 `slack_webhook_url`이 맞는지, 해당 Slack 앱/채널에 웹후크가 연결돼 있는지 확인하세요.
-- **특정 포럼만 안 옴**  
-  봇이 그 포럼 채널을 볼 수 있는지, 채널 ID가 `forum_channel_ids`에 정확히 들어갔는지 확인하세요.
+설정 파일 경로는 `DISCORD_BOT_CONFIG_PATH=/path/to/config.yaml` 환경 변수로 바꿀 수 있습니다.
+Docker 실행 방법은 아래 배포 명령을 참고하세요. Compose가 `config.yaml`과 `data`를 마운트합니다.
 
 ## Slack List 동기화와 assign
 
@@ -140,14 +104,21 @@ auto_solve:
   inactive_days: 14
 ```
 
-기존 `forum_channel_ids` 안에서 이름이 `support`인 포럼을 찾고, 그 서버의 `ROBOTIS`
-역할과 포럼의 `Solved` 또는 `✅Solved` 태그를 찾습니다. 영문 대소문자는 구분하지 않습니다.
-이름이 다르면 `config.example.yaml`의 이름 설정을 변경하세요. 같은 이름이 여러 개이면
-태그를 변경하지 않고 로그를 남깁니다. 이때만 해당 ID 설정을 사용하면 됩니다.
+기존 알림·동기화에 사용하는 **`discord.forum_channel_ids` 전체**를 자동 완료 대상으로 사용합니다.
+따라서 `support〈en〉`, `support〈kr〉`를 함께 등록해두면 둘 다 검사합니다.
+각 포럼이 속한 서버의 `ROBOTIS` 역할과 해당 포럼의 `Solved` 또는 `✅Solved` 태그를
+별도로 찾습니다. 영문 대소문자는 구분하지 않으며 포럼마다 다른 태그 ID를 사용합니다.
+역할·태그 이름이 다르면 `config.example.yaml`의 이름 설정을 변경하세요.
+어느 포럼에서 역할/태그를 찾지 못하거나 이름이 중복되면 그 포럼만 건너뜁니다.
+
+이전 단일 포럼 설정의 `auto_solve.forum_channel_name` 또는 `forum_channel_id`가 남아 있으면
+그 범위로 계속 제한됩니다. **여러 포럼을 사용하려면 두 값을 지우거나 빈 문자열로 설정**하세요.
+`solved_tag_id`도 비워두어 각 포럼에서 태그를 찾게 해야 합니다.
+여러 서버를 사용하는 경우 `robotis_role_id` 대신 역할 이름을 사용하세요.
 
 - 새 대상 포럼 글 생성 또는 `/table_update` 실행 시 검사합니다. 주기 작업은 없으며,
   **14일이 지난 뒤 다음 트리거 때** 처리합니다. 일반 댓글 작성 자체는 동기화 트리거가 아닙니다.
-- 보관된 글을 포함하여 support의 미해결 글을 검사합니다. 마지막 사람 메시지가
+- 보관된 글을 포함하여 각 대상 포럼의 미해결 글을 검사합니다. 마지막 사람 메시지가
   최초 게시글이 아닌 답변이고, 작성자가 **검사 시점에** ROBOTIS 역할을 가지고 있으며,
   해당 메시지 작성 시각에서 14×24시간 이상 지났을 때만 완료 처리합니다.
 - 봇·웹후크·시스템 메시지는 대화에서 제외합니다. 마지막 사람이 고객이면 오래된 글도
@@ -158,6 +129,7 @@ auto_solve:
   새 대화가 확인되면 완료 처리하지 않고 열어둡니다. 봇에는 채널 보기, 메시지 기록 보기,
   **스레드 관리(Manage Threads)** 권한이 필요합니다.
 - 글별 메시지/역할 조회나 편집이 실패하면 해당 글은 건너뛰고 로그를 남깁니다.
+  자동 완료 단계에서 한 포럼의 역할/태그 설정이나 편집이 실패해도 다른 포럼은 계속 검사합니다.
   전체 포럼 목록 조회 실패 시에는 기존과 같이 동기화 자체를 중단합니다.
 - 판정과 태그 변경을 먼저 마친 뒤, 변경된 상태로 Slack 테이블을 한 번 재작성합니다.
   로그의 `자동 Solved 처리`로 적용된 글 ID를 확인할 수 있습니다.

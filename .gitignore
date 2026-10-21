@@ -1,5 +1,7 @@
 # 설정 파일(토큰 포함)은 커밋하지 않음
 config.yaml
+config.*.yaml
+!config.example.yaml
 data/
 
 .venv/

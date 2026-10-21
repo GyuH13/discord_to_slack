@@ -11,25 +11,25 @@ from .config import AutoSolveConfig
 logger = logging.getLogger(__name__)
 
 
+def is_target_forum(forum: discord.ForumChannel, settings: AutoSolveConfig) -> bool:
+    """기본은 기존 동기화 대상 전체. 명시된 단일 포럼 설정은 필터로 유지한다."""
+    if settings.forum_channel_id:
+        return str(forum.id) == settings.forum_channel_id
+    return not settings.forum_channel_name or (
+        forum.name.casefold() == settings.forum_channel_name.casefold()
+    )
+
+
 async def _resolve_settings(
     client: discord.Client,
     settings: AutoSolveConfig,
-    forum_channel_ids: list[str],
-) -> tuple[discord.ForumChannel, AutoSolveConfig]:
-    ids = [settings.forum_channel_id] if settings.forum_channel_id else forum_channel_ids
-    forums = []
-    for channel_id in dict.fromkeys(ids):
-        channel = await client.fetch_channel(int(channel_id))
-        if isinstance(channel, discord.ForumChannel) and (
-            settings.forum_channel_id
-            or channel.name.casefold() == settings.forum_channel_name.casefold()
-        ):
-            forums.append(channel)
-    if len(forums) != 1:
-        raise ValueError(
-            "대상 support 포럼을 하나로 구분할 수 없습니다. 이름 또는 ID를 확인해주세요."
-        )
-    forum = forums[0]
+    channel_id: str,
+) -> tuple[discord.ForumChannel, AutoSolveConfig] | None:
+    forum = await client.fetch_channel(int(channel_id))
+    if not isinstance(forum, discord.ForumChannel):
+        raise ValueError("자동 완료 대상이 포럼 채널이 아닙니다.")
+    if not is_target_forum(forum, settings):
+        return None
     roles = [
         role
         for role in await forum.guild.fetch_roles()
@@ -159,18 +159,26 @@ async def auto_solve_threads(
 ) -> list[discord.Thread]:
     if not settings.enabled:
         return threads
-    try:
-        forum, settings = await _resolve_settings(client, settings, forum_channel_ids)
-    except (discord.DiscordException, ValueError):
-        logger.exception("자동 완료 설정/포럼 조회 실패 — 태그 변경 건너뜀")
-        return threads
+    resolved = {}
+    for channel_id in dict.fromkeys(forum_channel_ids):
+        if settings.forum_channel_id and channel_id != settings.forum_channel_id:
+            continue
+        try:
+            target = await _resolve_settings(client, settings, channel_id)
+            if target is not None:
+                resolved[target[0].id] = target
+        except (discord.DiscordException, ValueError):
+            logger.exception("포럼 %s 자동 완료 설정/조회 실패 — 해당 포럼 건너뜀", channel_id)
 
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=settings.inactive_days)
     result = []
     for thread in threads:
-        if thread.parent_id == forum.id:
+        if target := resolved.get(thread.parent_id):
+            forum, forum_settings = target
             try:
-                thread = await _solve_one(client, thread, forum, settings, status_names, cutoff)
+                thread = await _solve_one(
+                    client, thread, forum, forum_settings, status_names, cutoff
+                )
             except discord.DiscordException:
                 logger.exception(
                     "자동 완료 제외: 글 %s의 메시지·역할 조회 또는 태그 변경 실패", thread.id

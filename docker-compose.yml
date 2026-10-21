@@ -9,4 +9,4 @@ services:
       - ./discord_forum_slack:/app/discord_forum_slack
     # 설정 파일 경로 (기본값이 /app/config.yaml 이므로 생략 가능)
     # environment:
-    #   - CONFIG_PATH=/app/config.yaml
+    #   - DISCORD_BOT_CONFIG_PATH=/app/config.yaml

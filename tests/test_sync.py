@@ -12,7 +12,7 @@ import discord
 from slack_sdk.errors import SlackApiError
 
 from discord_forum_slack import assign_store, discord_bot, slack_list
-from discord_forum_slack.config import AutoSolveConfig
+from discord_forum_slack.config import Config, DiscordConfig, SlackConfig, TableSyncConfig
 
 URL = "https://discord.com/channels/10/20"
 SOLVED_URL = "https://discord.com/channels/10/30"
@@ -348,12 +348,10 @@ async def archived_result(threads=(), error=False):
 
 class DiscordSnapshotTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.config = SimpleNamespace(
-            auto_solve=AutoSolveConfig(),
-            forum_channel_ids=["1"],
-            slack_bot_token="test",
-            slack_user_token="",
-            list_id="list",
+        self.config = Config(
+            discord=DiscordConfig(token="test", forum_channel_ids=["1"]),
+            slack=SlackConfig(bot_token="test"),
+            table_sync=TableSyncConfig(list_id="list"),
         )
         self.channel = Mock(spec=discord.ForumChannel)
         self.channel.id = 1
@@ -404,7 +402,7 @@ class DiscordSnapshotTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_channel_failure_and_empty_config_never_call_slack(self):
         for ids in (["1"], []):
-            self.config.forum_channel_ids = ids
+            self.config.discord.forum_channel_ids = ids
             self.client.get_channel.return_value = None
             self.client.fetch_channel.side_effect = discord.DiscordException("Forbidden")
             with patch.object(discord_bot, "sync_list") as sync:

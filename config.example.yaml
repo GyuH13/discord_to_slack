@@ -1,49 +1,28 @@
-# -------------------------------------------------------
-# Discord
-# -------------------------------------------------------
+# 세 기능이 공통으로 사용할 Discord 봇과 포럼 목록입니다.
+discord:
+  token: ""
+  forum_channel_ids: []  # 포럼 채널 우클릭 → 채널 ID 복사. 최소 1개 필요
 
-# Discord 봇 토큰
-# Developer Portal → 앱 선택 → Bot → Reset Token
-discord_token: ""
+slack:
+  bot_token: ""   # 메시지 전송 및 Slack 앱 인증
+  app_token: ""   # /table_update 수신용 Socket Mode (connections:write)
+  user_token: ""  # List API용. 비우면 bot_token 사용
 
-# 전송할 포럼 채널 ID 목록
-# Discord 개발자 모드 켜고 포럼 채널 우클릭 → 채널 ID 복사
-forum_channel_ids: []
+# 새 Discord 포럼 글을 Slack 채널에 알립니다.
+notifications:
+  enabled: true
+  channel_id: ""
 
-# 새 포럼 글 생성 또는 /table_update 실행 시 무응답 글 자동 완료
-# 기존 forum_channel_ids 안에서 support 포럼, ROBOTIS 역할, Solved 태그를 이름으로 찾습니다.
+# 새 글 생성 또는 /table_update 시 미해결 글로 Slack List를 재작성합니다.
+# 기존 assign 값은 백업·복원하며, 새 글의 assign은 빈칸입니다.
+table_sync:
+  enabled: true
+  list_id: ""
+
+# 위 트리거 시 마지막 사람 답변이 ROBOTIS이고 14일 이상 무응답이면 완료합니다.
+# 각 포럼에서 역할과 태그를 이름으로 찾으므로 여러 포럼에서 함께 동작합니다.
 auto_solve:
-  enabled: false  # 사용하려면 true
+  enabled: false
   inactive_days: 14
-  forum_channel_name: "support"
   robotis_role_name: "ROBOTIS"
   solved_tag_name: "Solved"  # ✅Solved도 인식
-  # 이름이 중복되거나 이름 대신 ID로 지정하려면 아래 설정 사용
-  forum_channel_id: ""
-  robotis_role_id: ""
-  solved_tag_id: ""
-
-# -------------------------------------------------------
-# Slack
-# -------------------------------------------------------
-
-# 메시지를 전송할 Slack 채널 ID
-# Slack 채널 우클릭 → 채널 세부 정보 보기 → 하단 채널 ID 복사
-slack_channel_id: ""
-
-# Slack Bot Token — 메시지 전송 및 캔버스 API 호출에 사용
-# api.slack.com/apps → 앱 선택 → OAuth & Permissions → Bot User OAuth Token
-slack_bot_token: "xoxb-..."
-
-# Slack App-Level Token — Socket Mode 연결에 사용
-# api.slack.com/apps → 앱 선택 → Basic Information → App-Level Tokens
-# connections:write scope 필요
-slack_app_token: "xapp-..."
-
-# 업데이트할 Slack List ID
-# List 열기 → 우상단 점 세 개 → 링크 복사 → URL에서 /lists/ 뒤 부분
-list_id: ""
-
-# Slack User Token — List API 동기화에 사용
-# api.slack.com/apps → 앱 선택 → OAuth & Permissions → User OAuth Token
-slack_user_token: "xoxp-..."

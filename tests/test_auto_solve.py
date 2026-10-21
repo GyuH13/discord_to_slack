@@ -10,7 +10,15 @@ import discord
 import yaml
 
 from discord_forum_slack import auto_solve, discord_bot
-from discord_forum_slack.config import AutoSolveConfig, Config, load_config
+from discord_forum_slack.config import (
+    AutoSolveConfig,
+    Config,
+    DiscordConfig,
+    NotificationsConfig,
+    SlackConfig,
+    TableSyncConfig,
+    load_config,
+)
 
 NOW = datetime(2026, 10, 15, tzinfo=timezone.utc)
 
@@ -71,13 +79,10 @@ class AutoSolveTests(unittest.IsolatedAsyncioTestCase):
             side_effect=lambda ident: self.forum if ident == 10 else self.thread
         )
         self.config = Config(
-            discord_token="test",
-            slack_channel_id="channel",
-            forum_channel_ids=["10"],
-            slack_bot_token="test",
-            slack_app_token="test",
-            slack_user_token="test",
-            list_id="list",
+            discord=DiscordConfig(token="test", forum_channel_ids=["10"]),
+            slack=SlackConfig(bot_token="test", app_token="test", user_token="test"),
+            notifications=NotificationsConfig(channel_id="channel"),
+            table_sync=TableSyncConfig(list_id="list"),
             auto_solve=self.settings,
         )
 
@@ -259,9 +264,9 @@ class AutoSolveTests(unittest.IsolatedAsyncioTestCase):
         self.thread.edit.assert_not_awaited()
         self.assertEqual(len(result[0]), 1)
 
-    async def test_new_post_triggers_common_sync_without_user_token(self):
-        self.config.slack_bot_token = ""
-        self.config.slack_user_token = ""
+    async def test_new_post_triggers_common_sync_with_notifications_disabled(self):
+        self.config.notifications.enabled = False
+        self.config.slack.user_token = ""
         with (
             patch.object(discord_bot, "_fetch_author", return_value="Author"),
             patch.object(discord_bot, "run_sync_list") as sync,
@@ -269,20 +274,115 @@ class AutoSolveTests(unittest.IsolatedAsyncioTestCase):
             await discord_bot._handle_new_thread(self.thread, self.config, self.client)
         sync.assert_awaited_once_with(self.config, self.client)
 
-    async def test_ambiguous_forum_name_skips_all_edits(self):
-        other = Mock(spec=discord.ForumChannel)
-        other.name = "Support"
-        self.client.fetch_channel.side_effect = lambda ident: self.forum if ident == 10 else other
+    def setup_second_forum(self):
+        self.forum.name = "support〈en〉"
+        role = SimpleNamespace(id=34, name="ROBOTIS")
+        solved = SimpleNamespace(id=33, name="Solved")
+        forum = Mock(spec=discord.ForumChannel)
+        forum.id = 30
+        forum.name = "support〈kr〉"
+        forum.guild = SimpleNamespace(
+            id=2,
+            fetch_roles=AsyncMock(return_value=[role]),
+            fetch_member=AsyncMock(return_value=SimpleNamespace(roles=[role])),
+        )
+        forum.available_tags = [solved]
+        thread = Mock(spec=discord.Thread)
+        thread.id = 40
+        thread.parent_id = forum.id
+        thread.parent = forum
+        thread.guild = forum.guild
+        thread.archived = False
+        thread.applied_tags = []
+        thread.history.side_effect = lambda **kwargs: messages([message(ident=400)])
+
+        async def edit(**kwargs):
+            for key, value in kwargs.items():
+                if key != "reason":
+                    setattr(thread, key, value)
+            return thread
+
+        thread.edit = AsyncMock(side_effect=edit)
+        channels = {10: self.forum, 20: self.thread, 30: forum, 40: thread}
+        self.client.fetch_channel.side_effect = channels.__getitem__
+        self.config.discord.forum_channel_ids = ["10", "30"]
+        return forum, thread, solved
+
+    async def solve_both(self, second_thread):
+        return await auto_solve.auto_solve_threads(
+            self.client,
+            [self.thread, second_thread],
+            self.settings,
+            set(discord_bot.STATUS_LABELS),
+            ["10", "30"],
+            now=NOW,
+        )
+
+    async def test_all_configured_forums_use_their_own_role_and_solved_tag(self):
+        forum, thread, solved = self.setup_second_forum()
+        await self.solve_both(thread)
+        self.assertEqual(self.thread.applied_tags, [self.product, self.solved])
+        self.assertEqual(thread.applied_tags, [solved])
+        forum.guild.fetch_member.assert_awaited_with(100)
+        self.guild.fetch_member.assert_awaited_with(100)
+
+    async def test_same_name_forums_are_both_processed(self):
+        forum, thread, solved = self.setup_second_forum()
+        self.forum.name = forum.name = "support"
+        await self.solve_both(thread)
+        self.thread.edit.assert_awaited_once()
+        thread.edit.assert_awaited_once()
+
+    async def test_missing_tag_in_one_forum_does_not_block_other_forum(self):
+        _, thread, solved = self.setup_second_forum()
+        self.forum.available_tags = []
         with self.assertLogs(auto_solve.logger, level="ERROR"):
-            await auto_solve.auto_solve_threads(
-                self.client,
-                [self.thread],
-                self.settings,
-                set(discord_bot.STATUS_LABELS),
-                ["10", "99"],
-                now=NOW,
-            )
+            await self.solve_both(thread)
         self.thread.edit.assert_not_awaited()
+        self.assertEqual(thread.applied_tags, [solved])
+
+    async def test_role_failure_in_one_guild_does_not_block_other_forum(self):
+        _, thread, solved = self.setup_second_forum()
+        self.guild.fetch_roles.side_effect = discord.DiscordException("Forbidden")
+        with self.assertLogs(auto_solve.logger, level="ERROR"):
+            await self.solve_both(thread)
+        self.thread.edit.assert_not_awaited()
+        self.assertEqual(thread.applied_tags, [solved])
+
+    async def test_edit_failure_in_one_forum_does_not_block_other_forum(self):
+        _, thread, solved = self.setup_second_forum()
+        self.thread.edit.side_effect = discord.DiscordException("Forbidden")
+        with self.assertLogs(auto_solve.logger, level="ERROR"):
+            await self.solve_both(thread)
+        self.assertEqual(thread.applied_tags, [solved])
+
+    async def test_explicit_single_forum_id_still_limits_target(self):
+        _, thread, solved = self.setup_second_forum()
+        self.settings.forum_channel_id = "30"
+        await self.solve_both(thread)
+        self.thread.edit.assert_not_awaited()
+        self.assertEqual(thread.applied_tags, [solved])
+
+    async def test_explicit_name_still_limits_target(self):
+        forum, thread, solved = self.setup_second_forum()
+        self.settings.forum_channel_name = forum.name
+        await self.solve_both(thread)
+        self.thread.edit.assert_not_awaited()
+        self.assertEqual(thread.applied_tags, [solved])
+
+    async def test_two_forums_update_counts_and_rebuild_slack_only_once(self):
+        _, thread, _ = self.setup_second_forum()
+        with (
+            patch.object(discord_bot, "_sync_lock", asyncio.Lock()),
+            patch.object(discord_bot, "_fetch_threads", return_value=[self.thread, thread]),
+            patch.object(auto_solve, "datetime") as clock,
+            patch.object(discord_bot, "sync_list") as sync,
+        ):
+            clock.now.return_value = NOW
+            count = await discord_bot.run_sync_list(self.config, self.client)
+        self.assertEqual(count, 0)
+        sync.assert_called_once()
+        self.assertEqual(sync.call_args.kwargs["status_counts"]["solved"], 2)
 
 
 class ConfigTests(unittest.TestCase):
@@ -304,7 +404,7 @@ class ConfigTests(unittest.TestCase):
     def test_existing_config_stays_compatible_and_name_lookup_needs_no_ids(self):
         self.assertFalse(self.load({}).auto_solve.enabled)
         cfg = self.load({"auto_solve": {"enabled": True}})
-        self.assertEqual(cfg.auto_solve.forum_channel_name, "support")
+        self.assertEqual(cfg.auto_solve.forum_channel_name, "")
         self.assertEqual(cfg.auto_solve.robotis_role_name, "ROBOTIS")
         self.assertEqual(cfg.auto_solve.inactive_days, 14)
 

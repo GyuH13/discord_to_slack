@@ -8,7 +8,7 @@ import discord
 from discord import Thread
 
 from . import store
-from .auto_solve import auto_solve_threads, has_solved_tag
+from .auto_solve import auto_solve_threads, has_solved_tag, is_target_forum
 from .config import Config
 from .msg_sender import post_message
 from .slack_list import sync_list
@@ -51,7 +51,7 @@ def _is_forum_thread(parent: discord.abc.GuildChannel | None) -> bool:
 
 
 def _is_target_channel(parent: discord.ForumChannel, config: Config) -> bool:
-    return bool(config.forum_channel_ids) and str(parent.id) in config.forum_channel_ids
+    return str(parent.id) in config.discord.forum_channel_ids
 
 
 def _discord_url(thread: Thread) -> str:
@@ -71,11 +71,11 @@ async def _fetch_author(thread: Thread) -> str:
 
 
 async def _fetch_threads(client: discord.Client, config: Config) -> list[Thread]:
-    if not config.forum_channel_ids:
+    if not config.discord.forum_channel_ids:
         raise RuntimeError("대상 포럼이 없어 동기화를 중단합니다.")
     threads: dict[int, Thread] = {}
     active_by_guild: dict[int, list[Thread]] = {}
-    for cid in dict.fromkeys(config.forum_channel_ids):
+    for cid in dict.fromkeys(config.discord.forum_channel_ids):
         try:
             channel = client.get_channel(int(cid)) or await client.fetch_channel(int(cid))
             if not isinstance(channel, discord.ForumChannel):
@@ -114,7 +114,7 @@ async def _get_issue_snapshot(
             threads,
             config.auto_solve,
             set(STATUS_LABELS),
-            config.forum_channel_ids,
+            config.discord.forum_channel_ids,
         )
     counts = {"solved": 0, "handling": 0, "new_issue": 0}
     result: list[dict] = []
@@ -123,11 +123,7 @@ async def _get_issue_snapshot(
         if not _is_forum_thread(parent) or not _is_target_channel(parent, config):
             raise RuntimeError("글의 대상 포럼을 확인할 수 없어 동기화를 중단합니다.")
         _, status_tags = _split_tags(_get_tags(thread))
-        if config.auto_solve.enabled and (
-            str(thread.parent_id) == config.auto_solve.forum_channel_id
-            if config.auto_solve.forum_channel_id
-            else parent.name.casefold() == config.auto_solve.forum_channel_name.casefold()
-        ):
+        if config.auto_solve.enabled and is_target_forum(parent, config.auto_solve):
             if has_solved_tag(thread, config.auto_solve):
                 status_tags = ["Complete"]
         if "Complete" in status_tags:
@@ -168,18 +164,21 @@ async def run_sync_list(
     client: discord.Client,
 ) -> int:
     """조회부터 동기화까지 직렬화하여 오래된 스냅샷의 덮어쓰기를 방지합니다."""
+    if not config.table_sync.enabled and not config.auto_solve.enabled:
+        return 0
     if _sync_lock.locked():
         logger.info("sync_list 이미 실행 중 — 완료 후 재실행")
     async with _sync_lock:
         snapshot = await _get_issue_snapshot(client, config, apply_auto_solve=True)
-        await asyncio.to_thread(
-            sync_list,
-            slack_bot_token=config.slack_bot_token,
-            slack_user_token=config.slack_user_token,
-            list_id=config.list_id,
-            threads=snapshot.issues,
-            status_counts=snapshot.counts,
-        )
+        if config.table_sync.enabled:
+            await asyncio.to_thread(
+                sync_list,
+                slack_bot_token=config.slack.bot_token,
+                slack_user_token=config.slack.user_token,
+                list_id=config.table_sync.list_id,
+                threads=snapshot.issues,
+                status_counts=snapshot.counts,
+            )
         return len(snapshot.issues)
 
 
@@ -188,24 +187,24 @@ async def _handle_new_thread(thread: Thread, config: Config, client: discord.Cli
     if not _is_forum_thread(parent) or not _is_target_channel(parent, config):
         return
 
-    author = await _fetch_author(thread)
-    url = _discord_url(thread)
-    tags = _get_tags(thread)
+    if config.notifications.enabled:
+        try:
+            author = await _fetch_author(thread)
+            permalink = await asyncio.to_thread(
+                post_message,
+                slack_bot_token=config.slack.bot_token,
+                channel_id=config.notifications.channel_id,
+                title=thread.name,
+                author=author,
+                url=_discord_url(thread),
+                forum_name=parent.name,
+                tags=_get_tags(thread),
+            )
+            store.set_link(thread.id, permalink)
+        except Exception:
+            logger.exception("새 글 Slack 알림 실패: 스레드 %s", thread.id)
 
-    if config.slack_bot_token and config.slack_channel_id:
-        permalink = await asyncio.to_thread(
-            post_message,
-            slack_bot_token=config.slack_bot_token,
-            channel_id=config.slack_channel_id,
-            title=thread.name,
-            author=author,
-            url=url,
-            forum_name=parent.name,
-            tags=tags,
-        )
-        store.set_link(thread.id, permalink)
-
-    if config.list_id:
+    if config.table_sync.enabled or config.auto_solve.enabled:
         await run_sync_list(config, client)
 
 
